@@ -121,7 +121,7 @@ By combining both pipelining and multi-threading, we expected our speedups over 
 
 When we began our contributions to the Adam project, implementations existed for both approaches described in the previous chapter. Before explaining the work that we did to create a pipelined SMR system that used speculative execution, we will examine in detail that existing building blocks that we had to work with.
 
-\subsection{Existing Multi-threaded Adam Implementation}
+\subsection{Existing Multi-Threaded Adam Implementation}
 
 The existing multi-threaded Adam implementation we started with was a modification to the existing Eve code to support nested requests. Some of the core changes involved the use of Apache's Commons Javaflow library to easily allow execution threads to rollback their state to a checkpoint, even if they are currently in the middle of executing. The other modification involved adding support for multiple checkpoints taken per batch, one after every time the execution threads ``hit a wall'', meaning that all currently executing threads were either finished with the batch or were ready to make a nested request.
 
@@ -138,7 +138,17 @@ This first thread would then either continue waiting for the nested request to c
 % Maybe rename this to core components or something?
 \section{Modifications and New Code}
 
+When implementing Adam in a multi-threaded pipeline way, we decided to first combine the two existing approaches into one system in a very structured way before implementing the parts of the functionality that were not yet present. We began by adapting the Sequential Pipeline Manager to schedule groups of threads instead of just one at a time, and then modified the Batch Manager to control a group of threads and behave within the pipeline.
+
 \subsection{The Parallel Pipeline Manager}
+
+By taking the structure of the existing SPM written by Kapritsos, we were able to build what we called the Parallel Pipeline Manager (PPM) to schedule groups of threads in the context of the pipeline. The changes that we had to make to the SPM to control groups of threads mostly centered around initialization and the correct detection of the correct time to swap groups on or off the execution pipeline.
+
+Within the SPM, a simple mechanism was used to schedule client requests to execution threads that ran one at a time in a pipelined fashion. Essentially, the SPM would assign the requests to threads by giving each thread one request before giving the first thread a second request and so on. In the PPM, we instead had to schedule requests within a batch to groups of threads and to threads within those groups. This was performed after the mixer was run on the batch, so we were able to assume that requests were mostly non-conflicting. We experimented with a couple of ways of assigning the requests to the threads but eventually found that our system worked best when we assigned every thread in the first group a request before beginning to assign requests to threads in the second group. We continued this process with the remaining groups before assigning a second request to each thread within the first group. We believe that this was the best way to assign the requests because doing so makes sure that all threads are utilized as best as possible, leveraging the multi-core nature of the machine before taking advantage of the pipelining by using multiple groups.
+
+The SPM had a simple method that execution threads could call when the thread was about to make its nested request and was ready to yield the pipeline to the next thread. In the PPM, this procedure became slightly more complicated. Each execution thread made the same sort of yield request, but the result of the call was simply to update a bit in a bitarray that stored which threads were ready to yield. When the last thread in the currently active group (the group that the PPM has allowed to execute) called this yield function, it would notify the PPM's control thread which would realize that it was time to schedule a new group of threads to run. This map also had to be updated when threads no longer wanted to yield and were ready to execute again (e.g. when the nested request returned for that thread). We decided in our implementation to only allow the PPM's control thread to mark that threads no longer wanted to yield because of the following scenario. 
+
+Imagine that in a group of four execution threads, the first thread reaches the point where it is ready to yield and makes its nested requests. Now imagine the other three threads are slightly behind and some but not all of them reach the point to yield before the nested request that the first thread made returns. If we allowed the first thread to mark that it no longer wanted to yield the pipeline, the PPM would not schedule the next group of threads to execute because not all of the threads in the group wanted to. A simple workaround for this was to only allow the PPM to mark the threads as not wanting to yield after they had been swapped off the pipeline at least one time.
 
 \subsection{The Parallel Group Manager}
 
