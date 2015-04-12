@@ -119,6 +119,14 @@ By combining both pipelining and multi-threading, we expected our speedups over 
 
 \section{Initial Code Structure}
 
+When we began our contributions to the Adam project, implementations existed for both approaches described in the previous chapter. Before explaining the work that we did to create a pipelined SMR system that used speculative execution, we will examine in detail that existing building blocks that we had to work with.
+
+\subsection{Existing Multi-threaded Adam Implementation}
+
+The existing multi-threaded Adam implementation we started with was a modification to the existing Eve code to support nested requests. Some of the core changes involved the use of Apache's Commons Javaflow library to easily allow execution threads to rollback their state to a checkpoint, even if they are currently in the middle of executing. The other modification involved adding support for multiple checkpoints taken per batch, one after every time the execution threads ``hit a wall'', meaning that all currently executing threads were either finished with the batch or were ready to make a nested request.
+
+Execution threads were controlled in this implementation by the Batch Manager (BM) which handled the logic of making sure all threads had ``hit a wall'' and initiated the checkpoint operation for each execution thread. This BM also was supposed to handle ensuring that the all replicas were at the same state at each wall, which involved sending off a hash of the replica's state and initiating a rollback if needed. When we received the code however, this work was largely not finished as the existing multi-threaded attempt was intended to simply demonstrate that speculative execution could still provide performance gains in this environment.
+
 \subsection{Sequential Pipeline Manager}
 
 The Sequential Pipeline Manager (SPM) was first implemented by Manos Kapritsos to demonstrate that pipelining had promise in this system model. The SPM in particular was the part of the system that controlled what thread was currently running and handled scheduling the next thread when the running thread desired to yield. This code was very straightforward but it served as the inspiration for the pipeline manager that we built later to schedule groups of threads.
@@ -126,8 +134,6 @@ The Sequential Pipeline Manager (SPM) was first implemented by Manos Kapritsos t
 The SPM began execution by deterministically assigning requests to each thread. Note that even though the pipeline executed sequentially, the SPM leveraged lightweight threads to simplify the scheduling process. After assigning work, the SPM notified the first thread to start. That thread would then start processing the client request until the point that it was ready to make the nested request. The running thread at this point would call a yield function on the SPM to notify it to schedule the next thread and then the running thread would immediately make a blocking call to the backend service. When the SPM received this yield notification, it notified the thread with the next higher id than the previous running thread (modulo the number of threads). Eventually, the last thread with work to do would yield the pipeline, at which point the SPM scheduled the first thread again. 
 
 This first thread would then either continue waiting for the nested request to complete, or would continue executing the client request to completion. When the thread completed, it notified the SPM to inform it of its progress and of the fact that it no longer needed to be scheduled. Once all threads had responded in this way, the SPM finished the batch and released the results to the clients.
-
-\subsection{Existing Multi-threaded Adam Implementation}
 
 % Maybe rename this to core components or something?
 \section{Modifications and New Code}
@@ -143,6 +149,12 @@ This first thread would then either continue waiting for the nested request to c
 \section{Evaluation and Results}
 
 When we finished implementing Adam as described above, we were dismayed to find that our throughput increase numbers were much lower than we had hoped. In fact for a variety of reasons, we first saw that using 8 threads in Adam only resulted in less than a 4x throughput increase over the simple sequential implementation. We then took a methodical journey through several heinous bugs and the intricacies of this design until we arrived at much more satisfying performance results. For details on the approach we took to correcting our implementation, and more about the problem that we are trying to solve in general, please read Jim Given's thesis.
+
+\section{Future Work}
+
+
+
+\section{Related Work}
 
 \chapter{Conclusion}
 
