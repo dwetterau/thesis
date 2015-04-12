@@ -12,7 +12,7 @@
 \tableofcontents
 
 \chapter{Introduction}
-Computing systems today are rarely self-contained units. The desire for more levels of abstraction and cleaner separation of responsibilities has led to systems being modularized into services that must communicate and work together to accomplish tasks. Not only is this separation observed within a single system, but also in systems that interact with external services such as cloud based storage or computing providers. In order to build these services in a way that is guaranteed to be highly available, it would be great to leverage existing solutions such as the abstraction of a replicated state machine.
+Computing systems today are rarely self-contained units. The desire for more levels of abstraction and cleaner separation of responsibilities has led to systems being modularized into services that must communicate and work together to accomplish tasks. Not only is this separation observed within a single system, but also in systems that interact with external services such as cloud based storage or computing providers. In this paper we will present a way to build these highly available systems by leveraging existing solutions such as the abstraction of a replicated state machine.
 
 Unfortunately, the replicated state machine abstraction as it exists today is not immediately fit for this multiple service environment. Previous work on the RSM abstraction has focused on the client-server model, where the RSM behaves as a single-correct-server from only the perspective of the client. This behavior does not allow these systems to communicate with other services because doing so could expose the intermediate state of the system and there is no guarantee that this intermediate state is consistent.
 
@@ -60,40 +60,69 @@ In the worse case, the verifiers do not identify a token that was reached by eno
 
 \subsection{Performance Results}
 
-\chapter{Adam}
+The experimental evaluation of Eve resulted in promising results for this approach to a parallelizable replicated state machine. In particular, the creators of Eve demonstrated with microbenchmarks that Eve was capable of a 12.5x speedup over sequential execution using 16 core machines with 10ms requests. These numbers fell slightly with lighter-weight requests. They found that the improvement decreased to 10x for 1ms / request and 3.3x for 0.1ms / request mainly due to the inability to saturate the system with client requests and the increased overhead relative to the time spent processing the request.
 
-% Insert motivation for Adam here
+The authors also compared Eve's performance to an existing attempt at performing multi-threaded SMR called Remus. In Remus, the primary replica executes requests with multiple threads and then transfers its entire state to the other replicas. This approach, referred to as passive replication, both requires considerably more bandwidth (due to the transfer of full states) and does not protect against commission failures, while Eve does. Eve was shown to outperform Remus by a factor of 4.7x while using orders of magnitude less network bandwidth.
+
+\chapter{Adam: State Machine Replication in a Multi-Service Environment}
+
+In the last chapter we saw that the replicated state machine abstraction could be used with in a parallel environment with serious performance improvements in terms of request throughput. This approach successfully leverages the multi-core nature of today's machines, but it is not easily extended to allow for services to communicate at first glance. Systems today are rarely well described by the simple client-server model. Instead, most services need to interact with other services while processing a request from a client. 
+
+For example, if a client visits the website Dropbox.com, the server handling the clients request needs to make a nested request to a separate service to retrieve the names of the client's files, before sending the contents of the webpage back to the client. In this chapter, we will explore the previous work that was performed to convert the Eve system to work in this new environment, one where servers not only expose their states to clients, but also to other services through nested requests. This project was named Adam by the the same group that presented the Eve system.
 
 \section{Initial Approaches}
 
-\subsection{Single-Threaded Pipelining}
+The initial approach 
 
 \subsection{Eve Modification}
 
-\section{Multi-Threaded Pipelining in Adam}
+\subsection{Single-Threaded Pipelining}
 
-The core of this work was to adapt the previous work performed on the Adam project to support both mult-threading and pipelining simultaneously. As discussed in chapter 3, initial work on Adam had yielded some promising results both in the multi-threaded non-pipelined case and the single-threaded pipelined case. In order to better understand our approach to combining these techniques. Let use first define a couple terms for clarity:
+\section{Initial Results}
+
+\chapter{Multi-Threaded Pipelining in Adam}
+
+The core of this work was to adapt the previous work performed on the Adam project to support both multi-threading and pipelining simultaneously. As discussed in chapter 3, initial work on Adam had yielded some promising results both in the multi-threaded non-pipelined case and the single-threaded pipelined case. In order to better understand our approach to combining these techniques. Let use first define a couple terms for clarity:
 \begin{itemize}
 \item A \textbf{batch} of requests is a set of mostly non-conflicting client request to execute.
 \item A \textbf{group} of threads are threads that will run at the same time in the pipeline.
 \end{itemize}
 
-At a very high level, our approach was to adapt the existing single-threaded pipelining code to have it schedule groups of threads to run in the pipeline instead of a single thread. To manage each group of threads, we adapted the existing multi-threaded non-pipelined Adam code to allow it to behave within this pipelined environment. The following chapter will explain at length the steps we took to convert the existing code we started with, as well as the new code we had to write to make this idea a reality.
+At a very high level, our approach was to adapt the existing single-threaded pipelining code to have it schedule groups of threads to run in the pipeline instead of a single thread. To manage each group of threads, we adapted the existing multi-threaded non-pipelined Adam code to allow it to behave within this pipelined environment. The following chapter will explain at length the steps we took to convert the existing code we started with, as well as the new code we had to write to make this idea a reality
 
-\subsection{Theoretical Benefits}
+\section{Theoretical Benefits}
 
-By combining both pipelining and multi-threading, we expected our speedups over a naive replicated state machine in this system model to both scale with the number of threads we were using and double because of the two stage pipeline. In total this meant that with the 16 core machines we had to test with, we hoped to see a 32x throughput improvement.
+By combining both pipelining and multi-threading, we expected our speedups over a naive replicated state machine in this system model to both scale linearly with the number of threads we were using as well as double because of the two stage pipeline. In total this meant that with the 16 core machines we had to test with, we hoped to see a 32x throughput improvement in our microbenchmarks.
 
-\section{Parallel Pipeline Design and Implementation}
+\chapter{Parallel Pipeline Design and Implementation}
 
-\subsection{Initial Code Structure}
+\section{Initial Code Structure}
 
-\subsection{Modifications to and New Code}
+\subsection{Sequential Pipeline Manager}
 
-\subsection{Rollback and Correctness Guarantees}
+The Sequential Pipeline Manager (SPM) was first implemented by Manos Kapritsos to demonstrate that pipelining had promise in this system model. The SPM in particular was the part of the system that controlled what thread was currently running and handled scheduling the next thread when the running thread desired to yield. This code was very straightforward but it served as the inspiration for the pipeline manager that we built later to schedule groups of threads.
 
-\section{Performance Evaluation}
+The SPM began execution by deterministically assigning requests to each thread. Note that even though the pipeline executed sequentially, the SPM leveraged lightweight threads to simplify the scheduling process. After assigning work, the SPM notified the first thread to start. That thread would then start processing the client request until the point that it was ready to make the nested request. The running thread at this point would call a yield function on the SPM to notify it to schedule the next thread and then the running thread would immediately make a blocking call to the backend service. When the SPM received this yield notification, it notified the thread with the next higher id than the previous running thread (modulo the number of threads). Eventually, the last thread with work to do would yield the pipeline, at which point the SPM scheduled the first thread again. 
 
-\section{Conclusion}
+This first thread would then either continue waiting for the nested request to complete, or would continue executing the client request to completion. When the thread completed, it notified the SPM to inform it of its progress and of the fact that it no longer needed to be scheduled. Once all threads had responded in this way, the SPM finished the batch and released the results to the clients.
+
+\subsection{Existing Multi-threaded Adam Implementation}
+
+% Maybe rename this to core components or something?
+\section{Modifications and New Code}
+
+\subsection{The Parallel Pipeline Manager}
+
+\subsection{The Parallel Group Manager}
+
+\subsection{Verification Stage}
+
+\section{Rollback and Correctness Guarantees}
+
+\section{Evaluation and Results}
+
+When we finished implementing Adam as described above, we were dismayed to find that our throughput increase numbers were much lower than we had hoped. In fact for a variety of reasons, we first saw that using 8 threads in Adam only resulted in less than a 4x throughput increase over the simple sequential implementation. We then took a methodical journey through several heinous bugs and the intricacies of this design until we arrived at much more satisfying performance results. For details on the approach we took to correcting our implementation, and more about the problem that we are trying to solve in general, please read Jim Given's thesis.
+
+\chapter{Conclusion}
 
 \end{document}
