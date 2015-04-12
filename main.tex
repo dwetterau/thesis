@@ -64,7 +64,7 @@ The experimental evaluation of Eve resulted in promising results for this approa
 
 The authors also compared Eve's performance to an existing attempt at performing multi-threaded SMR called Remus. In Remus, the primary replica executes requests with multiple threads and then transfers its entire state to the other replicas. This approach, referred to as passive replication, both requires considerably more bandwidth (due to the transfer of full states) and does not protect against commission failures, while Eve does. Eve was shown to outperform Remus by a factor of 4.7x while using orders of magnitude less network bandwidth.
 
-\chapter{Adam: State Machine Replication in a Multi-Service Environment}
+\chapter{Adam: State Machine Replication with Multiple Services}
 
 In the last chapter we saw that the replicated state machine abstraction could be used with in a parallel environment with serious performance improvements in terms of request throughput. This approach successfully leverages the multi-core nature of today's machines, but it is not easily extended to allow for services to communicate at first glance. Systems today are rarely well described by the simple client-server model. Instead, most services need to interact with other services while processing a request from a client. 
 
@@ -72,13 +72,36 @@ For example, if a client visits the website Dropbox.com, the server handling the
 
 \section{Initial Approaches}
 
-The initial approach 
+Before describing Adam, it is important to understand why speculative execution approaches such as Eve do not work in this environment with communicated services. Consider a service $A$ that is using Eve and is processing client requests. While processing some of the client requests service $A$ receives, it must make a call to service $B$. Now suppose that due to the speculative nature of Eve, too many replicas diverge while processing this client request and all replicas need to rollback to their state before and try again in a sequential manner. At this point, the request that service $A$ made to $B$ has already happened and cannot be rolled back. If service $B$ had clients of its own, they could see the result of this nested request even after service $A$ tried again. Worse still, when service $A$ re-executes the requests sequentially, there is no guarantee that it makes exactly the same nested request. Non-determinism caused by thread interleaving could result in a nested request made for the same client request that is different from the nested request that would be made when processing sequentially.
+
+This well known problem is known as the output-commit problem. A very simple solution to the problem is to always take a snapshot before "outputting" or exposing internal state to any outside observer. The first attempt to convert Eve to work in this setting took exactly this approach, and is described in the following subsection. A separate idea to overcome this difficulty was to simply run in a deterministic and sequential manner, but to leverage deterministic pipelining for increased performance. With this idea, Adam would not be speculative and no rollback would ever be needed to maintain correctness.
 
 \subsection{Eve Modification}
 
+In an effort to leverage the performance gains that speculative execution approaches such as Eve promised, the first attempt to construct Adam focused on solving the output-commit problem that Eve faced in this environment. To do this, the 
+BLANK %Idk what to put here to describe the UTCS people who worked on this first
+simply modified the existing Eve implementation to take checkpoints before making nested requests. 
+
+% Diagram here or something about all hitting the wall at the same time
+
+Consider an Eve system with two execution threads processing client requests in a speculative manner. When the execution threads arrive at the part of processing the client request that requires a nested request to another service, they inform the system of their project and wait. After the last thread reaches such a point in the request processing, the system computes a hash of its state in exactly the same way that Eve ensured all replicas were the same at the end of processing an entire batch. If all replicas were in the same state after processing these prefixes of the client requests, the threads could safely make their nested requests and continue executing until the next such time, or until the end of their last request.
+
 \subsection{Single-Threaded Pipelining}
 
+A completely separate way to solve this output-commit problem is to simply not execute in a speculative manner. The
+BLANK %Idk what to put here to describe the UTCS people who worked on this first
+also implemented a system that leveraged single-threaded deterministic pipelining to try and solve this issue.
+
+The key insight to the advantage of pipelining in this environment is that when a single thread that is processing client requests makes a request to a separate service, it must wait synchronously for the response. If this communication with the backend service takes as long as the computation that the first service must perform, this would mean that the system would be idle half the time. It is then clear that if it were possible to perform more work while waiting for the nested request's response, the performance of the system would increase.
+
+In order to build a system that performed this pipelining, the BLANK used multiple threads but only ran them one at a time and scheduled them in a deterministic way. Deterministic scheduling and only having a single execution thread guaranteed that all requests were executed deterministically, and therefore that all replicas would converge in the system without the need for checkpointing or potentially rolling back. 
+
 \section{Initial Results}
+
+Then initial findings in terms of the performance gain that applying speculative execution had over a naive sequential implementation were quite promising. In Kapritsos' doctoral defense, he reported that the throughput of this speculative executing Adam system steadily increased with the number of cores according to the benchmarks that he ran. Even though the throughput increased, it did not seem to be scaling particularly linearly with the number of cores. Servers with 16 cores running 16 execution threads in this implementation of Adam only had about 4x the throughput of the same servers running with a single thread each.
+
+The single-threaded pipelining technique described above also showed serious promise. For very short client requests (0.1ms each), the service managed to even more than the expected 2x performance gain, probably due to the backend service batching requests creating what acted in practice like an additional pipeline stage. For requests that took longer to process (1-10ms each) however, the system successfully achieved an approximately 2x throughput increase.
+
 
 \chapter{Multi-Threaded Pipelining in Adam}
 
@@ -93,8 +116,6 @@ At a very high level, our approach was to adapt the existing single-threaded pip
 \section{Theoretical Benefits}
 
 By combining both pipelining and multi-threading, we expected our speedups over a naive replicated state machine in this system model to both scale linearly with the number of threads we were using as well as double because of the two stage pipeline. In total this meant that with the 16 core machines we had to test with, we hoped to see a 32x throughput improvement in our microbenchmarks.
-
-\chapter{Parallel Pipeline Design and Implementation}
 
 \section{Initial Code Structure}
 
