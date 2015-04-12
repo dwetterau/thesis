@@ -150,11 +150,27 @@ The SPM had a simple method that execution threads could call when the thread wa
 
 Imagine that in a group of four execution threads, the first thread reaches the point where it is ready to yield and makes its nested requests. Now imagine the other three threads are slightly behind and some but not all of them reach the point to yield before the nested request that the first thread made returns. If we allowed the first thread to mark that it no longer wanted to yield the pipeline, the PPM would not schedule the next group of threads to execute because not all of the threads in the group wanted to. A simple workaround for this was to only allow the PPM to mark the threads as not wanting to yield after they had been swapped off the pipeline at least one time.
 
-\subsection{The Parallel Group Manager}
+\subsection{The Parallel Group Manager and Execution Threads}
 
-\subsection{Verification Stage}
+The second part of our system for scheduling groups of threads to run in a speculative manner was the Parallel Group Manager (PGM): the system that controlled the execution threads within a single group. It was at this layer of abstraction in our system that we handled taking checkpoints, possibly rolling back, and informing the PPM when all of the threads in the group were finished executing their assigned requests within the batch. The Batch Manager served as our starting point for this part of the implementation, as it was already designed to control multiple execution threads in the Adam environment. Some of the major modifications we had to make to the existing BM code involved making sure that the PGM was able to be scheduled on and off the pipeline controlled by the PPM, and that verification requests were made at all of the required times and that the responses were handled properly. More details about our verification modifications and how we handled rollback are described in the next subsection. 
+
+In order to make sure the PGM did not continue after being swapped off the pipeline, we simply had it communicate with the PPM to determine what the currently active group was. If the active group corresponded to the group controlled by the PGM, the PGM continued instructing the execution threads to process more requests and checkpoint if needed. If instead the PGM found that the current group was no longer its own, it simply waited until the PPM notified it to continue.
+
+We also had to make many changes to the execution threads to ensure that they behaved in this new parallel pipeline environment. In particular, we had to ensure that the execution threads made the appropriate calls into the PPM to notify it when they were ready to yield and that the threads ensured that it was their owning group's turn to execute in the pipeline before proceeding with their executions.
+
+\subsection{Verification Stage and Rollback}
+
+When we inherited the original Adam approach implementation, the verification stage had yet to be converted from its original behavior within Eve. In Eve, the system was required to send out a verification message at the end of the computation of a batch to ensure that all replicas converged. In Adam however, a verification request is needed before any execution thread makes a nested request as well as at the end of the batch.
+
+In order to make this modification, we first had to add a second message processing thread to the system that could concurrently process the responses from a verification stage while also processing client requests. This was mostly an implementation detail but we do suspect that each control thread we add to the system reduces the scalability of the system as we approach maximum utilization of our machines. When the verification response was received from the verifiers by the execution replicas, they would process the response and determine whether they needed to rollback, receive a state transfer, or could safely continue executing. Details about how our system handled rollback responses to verification requests can be found in the next section.
 
 \section{Rollback and Correctness Guarantees}
+
+In this parallel pipeline system we must be prepared to rollback the state of the replica to one that all replicas agree on in the event that the speculative execution causes a divergence. Note that because we always ensure that all replicas are in the same state immediately before making any nested request, this means that the state that we must rollback to is right before some execution threads make a nested request or right at the beginning of the batch. If it is the later, rollback is trivial, we simply must throw away all work performed so far and execute in a sequential deterministic manner to guarantee that progress is made and that all replicas converge.
+
+If instead we rollback to right before the threads in a group make a nested request, our system must restore the state of all execution threads to the state they had before making these requests and switch into a sequential deterministic mode to ensure progress and convergence. We use Apache's Commons Javaflow library, specifically the Continuations objects in this library, to keep track of the stack of each execution thread so that we can restore this stack and guarantee that all execution threads are in the exact state they were in right before they made their nested request. These Continuation objects with the stack of each thread are stored in the Merkle tree data structure that Eve used which allows the replicas to make sure that they also have the same recorded stacks for each execution thread whenever a verification is performed. This also allows replicas to receive continuations in a state transfer and immediately start the execution threads at the same point in the execution. 
+
+After performing a rollback in the non-trivial case, the threads in the now current group will either re-execute their request (if a response was never received) or will read the result from a cache if a response was received. Since we know that all execution threads were in the same state before making this request, we know that the request that each thread makes must be exactly the same, thereby eliminating the issue that Eve has in this environment with making requests that can never be repeated after rolling back.
 
 \section{Evaluation and Results}
 
@@ -162,10 +178,14 @@ When we finished implementing Adam as described above, we were dismayed to find 
 
 \section{Future Work}
 
+One proposed improvement to the above design that we did not implement was an optimization in the verification process. The idea is to combine the nested requests with the verification requests, eliminating the need for the verifiers and this extra round trip. This approach does however require that the backend service is aware that the service making nested requests is running our Adam system while our current implementation does not. In practice, we found that this round trip was not the bottleneck of the system, but this improvement could still easily be made.
 
+As shown in the evaluation section, we did find that our system had much better performance gains on longer client requests than shorter ones due to the overhead that the additional checkpoints incurs in the form of additional Merkle tree computations. We believe that the system could be modified to minimize the total number of checkpoints needed by making much larger groups and not checkpointing until all of the requests in these larger groups are ready to make the nested request.
 
 \section{Related Work}
 
 \chapter{Conclusion}
+
+We have presented a novel approach to providing the replicated state machine abstraction in an environment with communicating services that leverages both the multi-core nature of today's machines and pipelining techniques to improve resource utilization. We found through the use of microbenchmarks that our design and implementation allows a workload of heavy requests to scale up to 21.8x the throughput of a naive sequential implementation in a non-replicated setting with 16 core machines, or up to 13.0x the throughput in a replicated setting with 8 cores per execution server.
 
 \end{document}
