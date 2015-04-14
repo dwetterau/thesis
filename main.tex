@@ -12,13 +12,13 @@
 \tableofcontents
 
 \chapter{Introduction}
-Computing systems today are rarely self-contained units. The desire for more levels of abstraction and cleaner separation of responsibilities has led to systems being modularized into services that must communicate and work together to accomplish tasks. Not only is this separation observed within a single system, but also in systems that interact with external services such as cloud based storage or computing providers. In this paper we will present a way to build these highly available systems by leveraging existing solutions such as the abstraction of a replicated state machine.
+Computing systems today are rarely self-contained units. The desire for more levels of abstraction and cleaner separation of responsibilities has led to systems being modularized into services that must communicate and work together to accomplish tasks. Not only is this separation observed within single systems, but also in systems that interact with external services such as cloud based storage or computing providers. In this paper we will present a way to build these systems in a highly available way by leveraging existing techniques such as the replicated state machine abstraction.
 
-Unfortunately, the replicated state machine abstraction as it exists today is not immediately fit for this multiple service environment. Previous work on the RSM abstraction has focused on the client-server model, where the RSM behaves as a single-correct-server from only the perspective of the client. This behavior does not allow these systems to communicate with other services because doing so could expose the intermediate state of the system and there is no guarantee that this intermediate state is consistent.
+Unfortunately, the replicated state machine abstraction as it exists today is not immediately fit for this multiple service environment. Previous work on the RSM abstraction has focused on the client-server model, where the RSM behaves as a single-correct-server from the perspective of the client and nothing else. This behavior does not allow these systems to communicate with other services because doing so could expose the intermediate state of the system which is not guaranteed to be consistent in this abstraction.
 
-Aside from consistency issues, a traditional RSM abstraction would also suffer from fundamental performance deficiencies. Most replication protocols rely on the sequential execution of commands to guarantee that replicas operate in a deterministic manner. Not only does sequential execution do a poor job of leveraging today’s multicore machines, it also would be require a system in this environment to remain idle while waiting for the response from a command issued to another service.
+Aside from consistency issues, a traditional RSM abstraction would also suffer from fundamental performance deficiencies in this environment. Most replication protocols rely on the sequential execution of commands to guarantee that replicas operate in a deterministic manner. Not only does sequential execution do a poor job of leveraging abundantly available multicore machines, it also requires that a system in this environment remain idle while waiting for the response from a command issued to another service.
 
-In this paper, we will present a technique to adapt the replicated state machine abstraction to the environment described above. We will first leverage recent work on speculative execution to allow our system to better utilize the multicore nature of machines today. In addition, we will show how to pipeline a system using speculative execution to mitigate the blocking of the system while waiting for the response of communications it may perform. This work builds on operations originally made by the Laboratory for Advanced Systems Research at UT and was a joint effort between myself and Jim Given. I highly recommend reading Jim’s thesis on this same work to get the complete understanding of this project.
+In this paper, we will present a technique to adapt the replicated state machine abstraction to the environment described above. We will first leverage recent work on multi-threaded speculative execution to allow our system to better utilize the multicore nature of machines today. In addition, we will show how to pipeline a system using speculative execution to mitigate the blocking of the system while waiting for the response of communications it may perform. This work builds on operations originally made by the Laboratory for Advanced Systems Research at UT and was a joint effort between myself and Jim Given. I highly recommend reading Jim’s thesis on this same work to get the complete understanding of this project.
 
 The rest of this paper is structured as follows. Chapter 2 will provide a comprehensive background on the replicated state machine abstraction and the Eve system, which pioneered the use of speculative execution within a RSM. Chapter 3 will introduce Adam, a system to provide high availability in an environment with services that communicate not only with clients, but also with other services. Chapter 4 will describe at a high level the design and benefits of pipelining in Adam. Chapter 5 will explore our implementation of Adam in detail along with the correctness guarantees Adam provides. Chapter 6 will display our evaluation and the performance of Adam. Chapter 7 will discuss work related to Adam and the conclusion of this thesis will be presented in Chapter 8.
 
@@ -105,6 +105,8 @@ The single-threaded pipelining technique described above also showed serious pro
 
 \chapter{Multi-Threaded Pipelining in Adam}
 
+\section{Design Overview}
+
 The core of this work was to adapt the previous work performed on the Adam project to support both multi-threading and pipelining simultaneously. As discussed in chapter 3, initial work on Adam had yielded some promising results both in the multi-threaded non-pipelined case and the single-threaded pipelined case. In order to better understand our approach to combining these techniques. Let use first define a couple terms for clarity:
 \begin{itemize}
 \item A \textbf{batch} of requests is a set of mostly non-conflicting client request to execute.
@@ -116,6 +118,8 @@ At a very high level, our approach was to adapt the existing single-threaded pip
 \section{Theoretical Benefits}
 
 By combining both pipelining and multi-threading, we expected our speedups over a naive replicated state machine in this system model to both scale linearly with the number of threads we were using as well as double because of the two stage pipeline. In total this meant that with the 16 core machines we had to test with, we hoped to see a 32x throughput improvement in our microbenchmarks.
+
+\chapter{Adam Implementation}
 
 \section{Initial Code Structure}
 
@@ -172,17 +176,17 @@ If instead we rollback to right before the threads in a group make a nested requ
 
 After performing a rollback in the non-trivial case, the threads in the now current group will either re-execute their request (if a response was never received) or will read the result from a cache if a response was received. Since we know that all execution threads were in the same state before making this request, we know that the request that each thread makes must be exactly the same, thereby eliminating the issue that Eve has in this environment with making requests that can never be repeated after rolling back.
 
-\section{Evaluation and Results}
-
-When we finished implementing Adam as described above, we were dismayed to find that our throughput increase numbers were much lower than we had hoped. In fact for a variety of reasons, we first saw that using 8 threads in Adam only resulted in less than a 4x throughput increase over the simple sequential implementation. We then took a methodical journey through several heinous bugs and the intricacies of this design until we arrived at much more satisfying performance results. For details on the approach we took to correcting our implementation, and more about the problem that we are trying to solve in general, please read Jim Given's thesis.
-
 \section{Future Work}
 
 One proposed improvement to the above design that we did not implement was an optimization in the verification process. The idea is to combine the nested requests with the verification requests, eliminating the need for the verifiers and this extra round trip. This approach does however require that the backend service is aware that the service making nested requests is running our Adam system while our current implementation does not. In practice, we found that this round trip was not the bottleneck of the system, but this improvement could still easily be made.
 
 As shown in the evaluation section, we did find that our system had much better performance gains on longer client requests than shorter ones due to the overhead that the additional checkpoints incurs in the form of additional Merkle tree computations. We believe that the system could be modified to minimize the total number of checkpoints needed by making much larger groups and not checkpointing until all of the requests in these larger groups are ready to make the nested request.
 
-\section{Related Work}
+\chapter{Evaluation and Results}
+
+When we finished implementing Adam as described above, we were dismayed to find that our throughput increase numbers were much lower than we had hoped. In fact for a variety of reasons, we first saw that using 8 threads in Adam only resulted in less than a 4x throughput increase over the simple sequential implementation. We then took a methodical journey through several heinous bugs and the intricacies of this design until we arrived at much more satisfying performance results. For details on the approach we took to correcting our implementation, and more about the problem that we are trying to solve in general, please read Jim Given's thesis.
+
+\chapter{Related Work}
 
 \chapter{Conclusion}
 
