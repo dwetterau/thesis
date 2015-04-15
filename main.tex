@@ -11,7 +11,7 @@
 
 \tableofcontents
 
-\chapter{Introduction}
+\chapter{Introduction}\label{Introduction}
 Computing systems today are rarely self-contained units. The desire for more levels of abstraction and cleaner separation of responsibilities has led to systems being modularized into services that must communicate and work together to accomplish tasks. Not only is this separation observed within single systems, but also in systems that interact with external services such as cloud based storage or computing providers. In this paper we will present a way to build these systems in a highly available way by leveraging existing techniques such as the replicated state machine abstraction.
 
 Unfortunately, the replicated state machine abstraction as it exists today is not immediately fit for this multiple service environment. Previous work on the RSM abstraction has focused on the client-server model, where the RSM behaves as a single-correct-server from the perspective of the client and nothing else. This behavior does not allow these systems to communicate with other services because doing so could expose the intermediate state of the system which is not guaranteed to be consistent in this abstraction.
@@ -20,9 +20,9 @@ Aside from consistency issues, a traditional RSM abstraction would also suffer f
 
 In this paper, we will present a technique to adapt the replicated state machine abstraction to the environment described above. We will first leverage recent work on multi-threaded speculative execution to allow our system to better utilize the multicore nature of machines today. In addition, we will show how to pipeline a system using speculative execution to mitigate the blocking of the system while waiting for the response of communications it may perform. This work builds on operations originally made by the Laboratory for Advanced Systems Research at UT and was a joint effort between myself and Jim Given. I highly recommend reading Jim’s thesis on this same work to get the complete understanding of this project.
 
-The rest of this paper is structured as follows. Chapter 2 will provide a comprehensive background on the replicated state machine abstraction and the Eve system, which pioneered the use of speculative execution within a RSM. Chapter 3 will introduce Adam, a system to provide high availability in an environment with services that communicate not only with clients, but also with other services. Chapter 4 will describe at a high level the design and benefits of pipelining in Adam. Chapter 5 will explore our implementation of Adam in detail along with the correctness guarantees Adam provides. Chapter 6 will display our evaluation and the performance of Adam. Chapter 7 will discuss work related to Adam and the conclusion of this thesis will be presented in Chapter 8.
+The rest of this paper is structured as follows. Chapter \ref{Background} will provide a comprehensive background on the replicated state machine abstraction and the Eve system, which pioneered the use of speculative execution within a RSM. Chapter \ref{Adam} will introduce Adam, a system to provide high availability in an environment with services that communicate not only with clients, but also with other services. Chapter \ref{AdamDesign} will describe at a high level the design and benefits of pipelining in Adam. Chapter \ref{AdamImplementation} will explore our implementation of Adam in detail along with the correctness guarantees Adam provides. Chapter \ref{AdamResults} will display our evaluation and the performance of Adam. Chapter \ref{RelatedWork} will discuss work related to Adam and the conclusion of this thesis will be presented in Chapter \ref{Conclusion}.
 
-\chapter{Background}
+\chapter{Background}\label{Background}
 \section{State Machine Replication}
 In order for a distributed system to be highly available in the presence of failures, the system must be replicated. State Machine Replication (SMR) is a way to guarantee that multiple replicas, either virtual or physical, produce the same outputs when given the same commands. In this section we will explain the abstraction of a replicated state machine along with how SMR has been traditionally implemented.
 
@@ -64,7 +64,7 @@ The experimental evaluation of Eve resulted in promising results for this approa
 
 The authors also compared Eve's performance to an existing attempt at performing multi-threaded SMR called Remus. In Remus, the primary replica executes requests with multiple threads and then transfers its entire state to the other replicas. This approach, referred to as passive replication, both requires considerably more bandwidth (due to the transfer of full states) and does not protect against commission failures, while Eve does. Eve was shown to outperform Remus by a factor of 4.7x while using orders of magnitude less network bandwidth.
 
-\chapter{Adam: State Machine Replication with Multiple Services}
+\chapter{Adam: State Machine Replication with Multiple Services}\label{Adam}
 
 In the last chapter we saw that the replicated state machine abstraction could be used with in a parallel environment with serious performance improvements in terms of request throughput. This approach successfully leverages the multicore nature of today's machines, but it is not easily extended to allow for services to communicate at first glance. Systems today are rarely well described by the simple client-server model. Instead, most services need to interact with other services while processing a request from a client. 
 
@@ -103,7 +103,7 @@ Then initial findings in terms of the performance gain that applying speculative
 The single-threaded pipelining technique described above also showed serious promise. For very short client requests (0.1ms each), the service managed to even more than the expected 2x performance gain, probably due to the backend service batching requests creating what acted in practice like an additional pipeline stage. For requests that took longer to process (1-10ms each) however, the system successfully achieved an approximately 2x throughput increase.
 
 
-\chapter{Multi-Threaded Pipelining in Adam}
+\chapter{Multi-Threaded Pipelining in Adam}\label{AdamDesign}
 
 \section{Design Overview}
 
@@ -119,7 +119,7 @@ At a very high level, our approach was to adapt the existing single-threaded pip
 
 By combining both pipelining and multi-threading, we expected our speedups over a naive replicated state machine in this system model to both scale linearly with the number of threads we were using as well as double because of the two stage pipeline. In total this meant that with the 16 core machines we had to test with, we hoped to see a 32x throughput improvement in our microbenchmarks.
 
-\chapter{Adam Implementation}
+\chapter{Adam Implementation}\label{AdamImplementation}
 
 \section{Initial Code Structure}
 
@@ -182,13 +182,13 @@ One proposed improvement to the above design that we did not implement was an op
 
 As shown in the evaluation section, we did find that our system had much better performance gains on longer client requests than shorter ones due to the overhead that the additional checkpoints incurs in the form of additional Merkle tree computations. We believe that the system could be modified to minimize the total number of checkpoints needed by making much larger groups and not checkpointing until all of the requests in these larger groups are ready to make the nested request.
 
-\chapter{Evaluation and Results}
+\chapter{Evaluation and Results}\label{AdamResults}
 
 When we finished implementing Adam as described above, we were dismayed to find that our throughput increase numbers were much lower than we had hoped. In fact for a variety of reasons, we first saw that using 8 threads in Adam only resulted in less than a 4x throughput increase over the simple sequential implementation. We then took a methodical journey through several heinous bugs and the intricacies of this design until we arrived at much more satisfying performance results. For details on the approach we took to correcting our implementation, and more about the problem that we are trying to solve in general, please read Jim Given's thesis.
 
-\chapter{Related Work}
+\chapter{Related Work}\label{RelatedWork}
 
-\chapter{Conclusion}
+\chapter{Conclusion}\label{Conclusion}
 
 We have presented a novel approach to providing the replicated state machine abstraction in an environment with communicating services that leverages both the multicore nature of today's machines and pipelining techniques to improve resource utilization. We found through the use of microbenchmarks that our design and implementation allows a workload of heavy requests to scale up to 21.8x the throughput of a naive sequential implementation in a non-replicated setting with 16 core machines, or up to 13.0x the throughput in a replicated setting with 8 cores per execution server.
 
