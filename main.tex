@@ -12,184 +12,360 @@
 \tableofcontents
 
 \chapter{Introduction}\label{Introduction}
-Computing systems today are rarely self-contained units. The desire for more levels of abstraction and cleaner separation of responsibilities has led to systems being modularized into services that must communicate and work together to accomplish tasks. Not only is this separation observed within single systems, but also in systems that interact with external services such as cloud based storage or computing providers. In this paper we will present a way to build these systems in a highly available way by leveraging existing techniques such as the replicated state machine abstraction.
+Computing systems today are rarely self-contained units. 
+The desire for more levels of abstraction and cleaner separation of responsibilities has led to systems being modularized into services that must communicate and work together to accomplish tasks. 
+Not only is this separation observed within single systems, but also in systems that interact with external services such as cloud based storage or computing providers. 
+In this paper we will present a way to build these systems in a highly available way by leveraging existing techniques such as the replicated state machine abstraction.
 
-Unfortunately, the replicated state machine abstraction as it exists today is not immediately fit for this multiple service environment. Previous work on the RSM abstraction has focused on the client-server model, where the RSM behaves as a single-correct-server from the perspective of the client and nothing else. This behavior does not allow these systems to communicate with other services because doing so could expose the intermediate state of the system which is not guaranteed to be consistent in this abstraction.
+Unfortunately, the replicated state machine abstraction as it exists today is not immediately fit for this multiple service environment. 
+Previous work on the RSM abstraction has focused on the client-server model, where the RSM behaves as a single-correct-server from the perspective of the client and nothing else. 
+This behavior does not allow these systems to communicate with other services because doing so could expose the intermediate state of the system which is not guaranteed to be consistent in this abstraction.
 
-Aside from consistency issues, a traditional RSM abstraction would also suffer from fundamental performance deficiencies in this environment. Most replication protocols rely on the sequential execution of commands to guarantee that replicas operate in a deterministic manner. Not only does sequential execution do a poor job of leveraging abundantly available multicore machines, it also requires that a system in this environment remain idle while waiting for the response from a command issued to another service.
+Aside from consistency issues, a traditional RSM abstraction would also suffer from fundamental performance deficiencies in this environment. 
+Most replication protocols rely on the sequential execution of commands to guarantee that replicas operate in a deterministic manner. 
+Not only does sequential execution do a poor job of leveraging abundantly available multicore machines, it also requires that a system in this environment remain idle while waiting for the response from a command issued to another service.
 
-In this paper, we will present a technique to adapt the replicated state machine abstraction to the environment described above. We will first leverage recent work on multi-threaded speculative execution to allow our system to better utilize the multicore nature of machines today. In addition, we will show how to pipeline a system using speculative execution to mitigate the blocking of the system while waiting for the response of communications it may perform. This work builds on operations originally made by the Laboratory for Advanced Systems Research at UT and was a joint effort between myself and Jim Given. I highly recommend reading Jim’s thesis on this same work to get the complete understanding of this project.
+In this paper, we will present a technique to adapt the replicated state machine abstraction to the environment described above. 
+We will first leverage recent work on multi-threaded speculative execution to allow our system to better utilize the multicore nature of machines today. 
+In addition, we will show how to pipeline a system using speculative execution to mitigate the blocking of the system while waiting for the response of communications it may perform. 
+This work builds on operations originally made by the Laboratory for Advanced Systems Research at UT and was a joint effort between myself and Jim Given. 
+I highly recommend reading Jim’s thesis on this same work to get the complete understanding of this project.
 
-The rest of this paper is structured as follows. Chapter \ref{Background} will provide a comprehensive background on the replicated state machine abstraction and the Eve system, which pioneered the use of speculative execution within a RSM. Chapter \ref{Adam} will introduce Adam, a system to provide high availability in an environment with services that communicate not only with clients, but also with other services. Chapter \ref{AdamDesign} will describe at a high level the design and benefits of pipelining in Adam. Chapter \ref{AdamImplementation} will explore our implementation of Adam in detail along with the correctness guarantees Adam provides. Chapter \ref{AdamResults} will display our evaluation and the performance of Adam. Chapter \ref{RelatedWork} will discuss work related to Adam and the conclusion of this thesis will be presented in Chapter \ref{Conclusion}.
+The rest of this paper is structured as follows. 
+Chapter \ref{Background} will provide a comprehensive background on the replicated state machine abstraction and the Eve system, which pioneered the use of speculative execution within a RSM. 
+Chapter \ref{Adam} will introduce Adam, a system to provide high availability in an environment with services that communicate not only with clients, but also with other services. 
+Chapter \ref{AdamDesign} will describe at a high level the design and benefits of pipelining in Adam. 
+Chapter \ref{AdamImplementation} will explore our implementation of Adam in detail along with the correctness guarantees Adam provides. 
+Chapter \ref{AdamResults} will display our evaluation and the performance of Adam. 
+Chapter \ref{RelatedWork} will discuss work related to Adam and the conclusion of this thesis will be presented in Chapter \ref{Conclusion}.
 
 \chapter{Background}\label{Background}
 \section{State Machine Replication}
-In order for a distributed system to be highly available in the presence of failures, the system must be replicated. State Machine Replication (SMR) is a way to guarantee that multiple replicas, either virtual or physical, produce the same outputs when given the same commands. In this section we will explain the abstraction of a replicated state machine along with how SMR has been traditionally implemented.
+In order for a distributed system to be highly available in the presence of failures, the system must be replicated. 
+State Machine Replication (SMR) is a way to guarantee that multiple replicas, either virtual or physical, produce the same outputs when given the same commands. 
+In this section we will explain the abstraction of a replicated state machine along with how SMR has been traditionally implemented.
 
-At the core of SMR is a deterministic state machine. A state machine is a model of computation that consists of state variables, which store the state of the machine, and commands that transform this state. In an SMR implementation, requests are issued by clients and contain the name of the state machine to operate on, the command to perform, and any other information needed to perform the command. When a replica receives a request, it performs the command by transitioning between states and finally producing output. For a write request from a client, the state machine might end in a state different from where it began (this can be thought of as the value of some variable being updated). In the case of a read request, the state machine returns to the same state it started at (no state was really changed).
+At the core of SMR is a deterministic state machine. 
+A state machine is a model of computation that consists of state variables, which store the state of the machine, and commands that transform this state. 
+In an SMR implementation, requests are issued by clients and contain the name of the state machine to operate on, the command to perform, and any other information needed to perform the command. 
+When a replica receives a request, it performs the command by transitioning between states and finally producing output. 
+For a write request from a client, the state machine might end in a state different from where it began (this can be thought of as the value of some variable being updated). 
+In the case of a read request, the state machine returns to the same state it started at (no state was really changed).
 
-The correctness goal of SMR is to provide a system that retains both safety and liveness in the presence of replica failures. SMR can be adapted to work under many different failure models simply by adjusting the number of replicas. For a weaker failure model, one only needs to either increase the number of replicas in the system or decrease the number of tolerated failures accordingly. In order to provide correctness, the requirement of SMR is that the observable state (including but not limited to the outputs) of each state machine must always be the same across all replicas. This is simply because if all replicas have the same observable state, any replica on its own could communicate with clients if another crashed.
+The correctness goal of SMR is to provide a system that retains both safety and liveness in the presence of replica failures. 
+SMR can be adapted to work under many different failure models simply by adjusting the number of replicas. 
+For a weaker failure model, one only needs to either increase the number of replicas in the system or decrease the number of tolerated failures accordingly. 
+In order to provide correctness, the requirement of SMR is that the observable state (including but not limited to the outputs) of each state machine must always be the same across all replicas. 
+This is simply because if all replicas have the same observable state, any replica on its own could communicate with clients if another crashed.
 
-To provide this correctness requirement, SMR has traditionally been implemented by only allowing sequential execution of commands. The reason behind this is that if commands are first ordered the same way on each replica, and are then executed one at a time in this deterministic way, then all replicas will arrive at the same state. This is easy to see because each state machine simply follows the exact same state transitions in the same order. This design is referred to as the agree-execute approach, and has been applied in a wide range of systems including the original Paxos protocol.
+To provide this correctness requirement, SMR has traditionally been implemented by only allowing sequential execution of commands. 
+The reason behind this is that if commands are first ordered the same way on each replica, and are then executed one at a time in this deterministic way, then all replicas will arrive at the same state. 
+This is easy to see because each state machine simply follows the exact same state transitions in the same order. 
+This design is referred to as the agree-execute approach, and has been applied in a wide range of systems including the original Paxos protocol.
 
-Sequential execution was an acceptable option when SMR was first introduced since single core performance was rapidly increasing. Now that the world has instead shifted to increasing the amount of parallelism to improve performance, we find that sequential execution is a serious limitation. If we tried to naively relax this sequential execution restriction and run commands using multiple threads, there would be no guarantee that the replicas would arrive in the same final state since the commands could be interleaved across the threads. In the next section, we will see one way that we can still provide the replicated state machine abstraction without the need for this sequential execution restriction.  
+Sequential execution was an acceptable option when SMR was first introduced since single core performance was rapidly increasing. 
+Now that the world has instead shifted to increasing the amount of parallelism to improve performance, we find that sequential execution is a serious limitation. 
+If we tried to naively relax this sequential execution restriction and run commands using multiple threads, there would be no guarantee that the replicas would arrive in the same final state since the commands could be interleaved across the threads. 
+In the next section, we will see one way that we can still provide the replicated state machine abstraction without the need for this sequential execution restriction. 
+ 
 
 \section{Eve: Execute-Verify Replication}
 
-In the previous section, we explored how the majority of SMR implementations relied on the agree-execute architecture to ensure that replicas converged to the same ending state. This approach guarantees convergence through determinism and sequential execution. One observation that can be made about these approaches is that they have effectively reduced the actual safety requirement of SMR (that the observable state of each state machine is the same across all replicas) to the problem of guaranteeing that all replicas agree on an order of commands to execute. Eve is a system that was developed at the University of Texas at Austin that uses the real safety requirement of SMR to enable multi-threaded execution.
+In the previous section, we explored how the majority of SMR implementations relied on the agree-execute architecture to ensure that replicas converged to the same ending state. 
+This approach guarantees convergence through determinism and sequential execution. 
+One observation that can be made about these approaches is that they have effectively reduced the actual safety requirement of SMR (that the observable state of each state machine is the same across all replicas) to the problem of guaranteeing that all replicas agree on an order of commands to execute. 
+Eve is a system that was developed at the University of Texas at Austin that uses the real safety requirement of SMR to enable multi-threaded execution.
 
-Eve uses what is referred to as speculative execution in a way that provides the safety guarantee of SMR while still providing liveness to form a correct replicated state machine abstraction. In Eve, replicas are given a set, or batch, of requests to execute from the primary, however they are not required to agree on an order in which to execute them. Replicas then fully leverage the potential of their underlying multicore machines to execute all of the requests in parallel. At the end of the execution, replicas compare states with each other in a verification stage and if enough replicas arrived at the same state, the results of the client requests are released. This step can be thought of as resolving the speculative execution. If not enough replicas agree on the final state, it must be due to a non-deterministic interleaving of the requests (since other sources of non-determinism are eliminated), so each replica simply re-executes all of the requests in the group in a deterministic order sequentially to guarantee both safety and liveness. This process of speculatively executing requests in parallel and then verifying that all replicas arrived at the same ending state is referred to as execute-verify.
+Eve uses what is referred to as speculative execution in a way that provides the safety guarantee of SMR while still providing liveness to form a correct replicated state machine abstraction. 
+In Eve, replicas are given a set, or batch, of requests to execute from the primary, however they are not required to agree on an order in which to execute them. 
+Replicas then fully leverage the potential of their underlying multicore machines to execute all of the requests in parallel. 
+At the end of the execution, replicas compare states with each other in a verification stage and if enough replicas arrived at the same state, the results of the client requests are released. 
+This step can be thought of as resolving the speculative execution. 
+If not enough replicas agree on the final state, it must be due to a non-deterministic interleaving of the requests (since other sources of non-determinism are eliminated), so each replica simply re-executes all of the requests in the group in a deterministic order sequentially to guarantee both safety and liveness. 
+This process of speculatively executing requests in parallel and then verifying that all replicas arrived at the same ending state is referred to as execute-verify.
 
-In theory the execute-verify approach is straightforward, but in order for Eve to work well, it is important that the case that requests have to be re-executed in the sequential manner is rare. If this were not the case, Eve would be strictly worse than SMR implemented sequentially because of the need to execute requests multiple times to guarantee safety. To reduce the likelihood that request interleavings cause the final states of replicas to diverge, the authors introduce what they call the mixer which is discussed in \ref{EveMixer}. After Eve runs the mixer on the incoming requests, it then proceeds to the execution stage which is described in \ref{EveExecution}. After executing a batch of requests, Eve moves on to the verification stage which guarantees that replicas compare their states efficiently and in a way that tolerates even Byzantine failures. This verification stage is described in \ref{EveVerification} and the final results that authors were able to produce with Eve are presented in \ref{EveResults}.
+In theory the execute-verify approach is straightforward, but in order for Eve to work well, it is important that the case that requests have to be re-executed in the sequential manner is rare. 
+If this were not the case, Eve would be strictly worse than SMR implemented sequentially because of the need to execute requests multiple times to guarantee safety. 
+To reduce the likelihood that request interleavings cause the final states of replicas to diverge, the authors introduce what they call the mixer which is discussed in \ref{EveMixer}. 
+After Eve runs the mixer on the incoming requests, it then proceeds to the execution stage which is described in \ref{EveExecution}. 
+After executing a batch of requests, Eve moves on to the verification stage which guarantees that replicas compare their states efficiently and in a way that tolerates even Byzantine failures. 
+This verification stage is described in \ref{EveVerification} and the final results that authors were able to produce with Eve are presented in \ref{EveResults}.
 
 \subsection{The Mixer}\label{EveMixer}
-Given a set of requests submitted to the Eve system by clients to execute, the mixer constructs a batch of requests to schedule for execution in the following way. The mixer examines each request to determine if it conflicts with any request already added to the next batch to execute. If the request does not conflict, it adds the request to the next batch to execute. If it does conflict, the mixer passes over the request. After a complete pass, the mixer releases the batch to be executed and after doing so, repeats this process on the requests that were left out of the batch on the previous pass.
+Given a set of requests submitted to the Eve system by clients to execute, the mixer constructs a batch of requests to schedule for execution in the following way. 
+The mixer examines each request to determine if it conflicts with any request already added to the next batch to execute. 
+If the request does not conflict, it adds the request to the next batch to execute. 
+If it does conflict, the mixer passes over the request. 
+After a complete pass, the mixer releases the batch to be executed and after doing so, repeats this process on the requests that were left out of the batch on the previous pass.
 
-The authors found that mixers were both easy to implement for various real applications such as the TPC-W benchmarks, and greatly reduced the likelihood that replicas would diverge due to thread interleavings. It is important to note that while the mixer does improve performance of the system greatly, it is not needed for either the safety or liveness conditions of SMR. Because Eve can re-execute requests as a fallback, there is no requirement that the requests in a batch do not conflict and therefore there is no required accuracy of the mixer in order for Eve to be correct.
+The authors found that mixers were both easy to implement for various real applications such as the TPC-W benchmarks, and greatly reduced the likelihood that replicas would diverge due to thread interleavings. 
+It is important to note that while the mixer does improve performance of the system greatly, it is not needed for either the safety or liveness conditions of SMR. 
+Because Eve can re-execute requests as a fallback, there is no requirement that the requests in a batch do not conflict and therefore there is no required accuracy of the mixer in order for Eve to be correct.
 
 \subsection{The Execution Stage}\label{EveExecution}
 
-The execution stage in Eve is where the system gains its massive performance gains over a sequential agree-execute SMR system. The output of running the mixer on the set of client requests to execute is a batch of requests that are hopefully unlikely to cause problems when they are executed in parallel. In the execution stage, these requests are distributed out across a number of execution threads to be run in parallel at the same time. When all of the execution threads finish performing the commands specified by the client requests in the batch, a hash of the final state of the state machine is computed efficiently using a concurrent Merkle tree implementation. This hash of the final state is then used in the verification stage to determine whether or not the parallel execution caused a divergence in the final states of the replicas.
+The execution stage in Eve is where the system gains its massive performance gains over a sequential agree-execute SMR system. 
+The output of running the mixer on the set of client requests to execute is a batch of requests that are hopefully unlikely to cause problems when they are executed in parallel. 
+In the execution stage, these requests are distributed out across a number of execution threads to be run in parallel at the same time. 
+When all of the execution threads finish performing the commands specified by the client requests in the batch, a hash of the final state of the state machine is computed efficiently using a concurrent Merkle tree implementation. 
+This hash of the final state is then used in the verification stage to determine whether or not the parallel execution caused a divergence in the final states of the replicas.
 
 \subsection{The Verification Stage}\label{EveVerification}
-In Eve's verification stage, replicas must compare their final states in an efficient manner that is also resistant to even byzantine failures. This is accomplished by relying on cryptographic primitives such as Message Authentication Codes (MACs) and collision resistant hashes of the states. As mentioned in the previous subsection, Eve replicas compute a hash of their state after processing a batch of requests by each using a Merkle tree for efficiency. After computing the root hash of the tree, replicas sign and send to a separate set of verification machines a signed token that consists of the root hash they started with before processing the current batch, and the hash of their state after processing the batch in a parallel manner.
+In Eve's verification stage, replicas must compare their final states in an efficient manner that is also resistant to even byzantine failures. 
+This is accomplished by relying on cryptographic primitives such as Message Authentication Codes (MACs) and collision resistant hashes of the states. 
+As mentioned in the previous subsection, Eve replicas compute a hash of their state after processing a batch of requests by each using a Merkle tree for efficiency. 
+After computing the root hash of the tree, replicas sign and send to a separate set of verification machines a signed token that consists of the root hash they started with before processing the current batch, and the hash of their state after processing the batch in a parallel manner.
 
-The verification machines then run an agreement protocol on the tokens submitted to them by all the replicas. In the simple case, all of the tokens match and the verifiers instruct the primary to release the result of the computation to the clients. This is achieved by responding with a ``commit" message. If instead some tokens differ but there is a token that enough replicas submitted to guarantee that a correct replica submitted it, the verification machines respond with a commit for that token but require the replicas that did not reach that state to receive a state transfer from the replicas that did. 
+The verification machines then run an agreement protocol on the tokens submitted to them by all the replicas. 
+In the simple case, all of the tokens match and the verifiers instruct the primary to release the result of the computation to the clients. 
+This is achieved by responding with a ``commit" message. 
+If instead some tokens differ but there is a token that enough replicas submitted to guarantee that a correct replica submitted it, the verification machines respond with a commit for that token but require the replicas that did not reach that state to receive a state transfer from the replicas that did. 
 
-In the worst case, the verifiers do not identify a token that was reached by enough replicas. In this case, the verifiers require all replicas to re-execute the requests in the batch in a sequential manner. After the replicas have re-executed the requests in the same order, there is no need to enter the verification stage again because the execution was performed deterministically. This deterministic execution guarantees that all replicas arrive at the same ending state. Note that this verification stage maintains the liveness property, since it is impossible for the replicas to get stuck in an infinite loop of verification.
+
+In the worst case, the verifiers do not identify a token that was reached by enough replicas. 
+In this case, the verifiers require all replicas to re-execute the requests in the batch in a sequential manner. 
+After the replicas have re-executed the requests in the same order, there is no need to enter the verification stage again because the execution was performed deterministically. 
+This deterministic execution guarantees that all replicas arrive at the same ending state. 
+Note that this verification stage maintains the liveness property, since it is impossible for the replicas to get stuck in an infinite loop of verification.
 
 \subsection{Performance Results}\label{EveResults}
 
-The experimental evaluation of Eve resulted in promising results for this approach to a multi-threaded replicated state machine. In particular, the creators of Eve demonstrated with microbenchmarks that Eve was capable of a 12.5x speedup over sequential execution using 16 core machines with 10ms requests. These numbers did however fall slightly with lightweight requests. They found that the improvement decreased to 10x for 1ms requests and 3.3x for 0.1ms requests mainly due to the inability to saturate the system with client requests and the increased overhead relative to the time spent performing computation for each request.
+The experimental evaluation of Eve resulted in promising results for this approach to a multi-threaded replicated state machine. 
+In particular, the creators of Eve demonstrated with microbenchmarks that Eve was capable of a 12.5x speedup over sequential execution using 16 core machines with 10ms requests. 
+These numbers did however fall slightly with lightweight requests. 
+They found that the improvement decreased to 10x for 1ms requests and 3.3x for 0.1ms requests mainly due to the inability to saturate the system with client requests and the increased overhead relative to the time spent performing computation for each request.
 
-The authors also compared Eve's performance to an existing attempt at performing multi-threaded SMR called Remus. In Remus, the primary replica executes requests with multiple threads and then transfers its entire state to the other replicas. This approach, referred to as passive replication, both requires considerably more bandwidth (due to the transfer of full states) and does not protect against commission failures, while Eve does. Eve was shown to outperform Remus by a factor of 4.7x while using orders of magnitude less network bandwidth in the authors' tests.
+The authors also compared Eve's performance to an existing attempt at performing multi-threaded SMR called Remus. 
+In Remus, the primary replica executes requests with multiple threads and then transfers its entire state to the other replicas. 
+This approach, referred to as passive replication, both requires considerably more bandwidth (due to the transfer of full states) and does not protect against commission failures, while Eve does. 
+Eve was shown to outperform Remus by a factor of 4.7x while using orders of magnitude less network bandwidth in the authors' tests.
 
 \chapter{Adam: State Machine Replication with Interacting Services}\label{Adam}
 
-In the last chapter we saw that the replicated state machine abstraction could be used with in a parallel environment with serious performance improvements in terms of request throughput. This approach successfully leverages the multicore nature of today's machines, but it is not easily extended to allow for services to communicate at first glance. Systems today are rarely well described by the simple client-server model. Instead, most services need to interact with other services while processing a request from a client. 
+In the last chapter we saw that the replicated state machine abstraction could be used with in a parallel environment with serious performance improvements in terms of request throughput. 
+This approach successfully leverages the multicore nature of today's machines, but it is not easily extended to allow for services to communicate at first glance. 
+Systems today are rarely well described by the simple client-server model. 
+Instead, most services need to interact with other services while processing a request from a client. 
 
-For example, if a client visits the website Dropbox.com, the server handling the clients request needs to make a nested request to a separate service to retrieve the names of the client's files, before sending the contents of the webpage back to the client. In this chapter, we will explore the previous work that was performed to convert the Eve system to work in this new environment, one where servers not only expose their states to clients, but also to other services through nested requests. This project was named Adam by the the same group that presented the Eve system.
+
+For example, if a client visits the website Dropbox.com, the server handling the clients request needs to make a nested request to a separate service to retrieve the names of the client's files, before sending the contents of the webpage back to the client. 
+In this chapter, we will explore the previous work that was performed to convert the Eve system to work in this new environment, one where servers not only expose their states to clients, but also to other services through nested requests. 
+This project was named Adam by the the same group that presented the Eve system.
 
 \section{Initial Approaches}
 
-Before describing Adam, it is important to understand why speculative execution approaches such as Eve do not work in this environment with communicated services. Consider a service $A$ that is using Eve and is processing client requests. While processing some of the client requests service $A$ receives, it must make a call to service $B$. Now suppose that due to the speculative nature of Eve, too many replicas diverge while processing this client request and all replicas need to rollback to their state before and try again in a sequential manner. At this point, the request that service $A$ made to $B$ has already happened and cannot be rolled back. If service $B$ had clients of its own, they could see the result of this nested request even after service $A$ tried again. Worse still, when service $A$ re-executes the requests sequentially, there is no guarantee that it makes exactly the same nested request. Non-determinism caused by thread interleaving could result in a nested request made for the same client request that is different from the nested request that would be made when processing sequentially.
+Before describing Adam, it is important to understand why speculative execution approaches such as Eve do not work in this environment with communicated services. 
+Consider a service $A$ that is using Eve and is processing client requests. 
+While processing some of the client requests service $A$ receives, it must make a call to service $B$. 
+Now suppose that due to the speculative nature of Eve, too many replicas diverge while processing this client request and all replicas need to rollback to their state before and try again in a sequential manner. 
+At this point, the request that service $A$ made to $B$ has already happened and cannot be rolled back. 
+If service $B$ had clients of its own, they could see the result of this nested request even after service $A$ tried again. 
+Worse still, when service $A$ re-executes the requests sequentially, there is no guarantee that it makes exactly the same nested request. 
+Non-determinism caused by thread interleaving could result in a nested request made for the same client request that is different from the nested request that would be made when processing sequentially.
 
-This well known problem is known as the output-commit problem. A very simple solution to the problem is to always take a snapshot before "outputting" or exposing internal state to any outside observer. The first attempt to convert Eve to work in this setting took exactly this approach, and is described in the following subsection. A separate idea to overcome this difficulty was to simply run in a deterministic and sequential manner, but to leverage deterministic pipelining for increased performance. With this idea, Adam would not be speculative and no rollback would ever be needed to maintain correctness.
+This well known problem is known as the output-commit problem. 
+A very simple solution to the problem is to always take a snapshot before "outputting" or exposing internal state to any outside observer. 
+The first attempt to convert Eve to work in this setting took exactly this approach, and is described in the following subsection. 
+A separate idea to overcome this difficulty was to simply run in a deterministic and sequential manner, but to leverage deterministic pipelining for increased performance. 
+With this idea, Adam would not be speculative and no rollback would ever be needed to maintain correctness.
 
 \subsection{Eve Modification}
 
-In an effort to leverage the performance gains that speculative execution approaches such as Eve promised, the first attempt to construct Adam focused on solving the output-commit problem that Eve faced in this environment. To do this, the 
+In an effort to leverage the performance gains that speculative execution approaches such as Eve promised, the first attempt to construct Adam focused on solving the output-commit problem that Eve faced in this environment. 
+To do this, the 
 BLANK %Idk what to put here to describe the UTCS people who worked on this first
 simply modified the existing Eve implementation to take checkpoints before making nested requests. 
 
+
 % Diagram here or something about all hitting the wall at the same time
 
-Consider an Eve system with two execution threads processing client requests in a speculative manner. When the execution threads arrive at the part of processing the client request that requires a nested request to another service, they inform the system of their project and wait. After the last thread reaches such a point in the request processing, the system computes a hash of its state in exactly the same way that Eve ensured all replicas were the same at the end of processing an entire batch. If all replicas were in the same state after processing these prefixes of the client requests, the threads could safely make their nested requests and continue executing until the next such time, or until the end of their last request.
+Consider an Eve system with two execution threads processing client requests in a speculative manner. 
+When the execution threads arrive at the part of processing the client request that requires a nested request to another service, they inform the system of their project and wait. 
+After the last thread reaches such a point in the request processing, the system computes a hash of its state in exactly the same way that Eve ensured all replicas were the same at the end of processing an entire batch. 
+If all replicas were in the same state after processing these prefixes of the client requests, the threads could safely make their nested requests and continue executing until the next such time, or until the end of their last request.
 
 \subsection{Single-Threaded Pipelining}
 
-A completely separate way to solve this output-commit problem is to simply not execute in a speculative manner. The
+A completely separate way to solve this output-commit problem is to simply not execute in a speculative manner. 
+The
 BLANK %Idk what to put here to describe the UTCS people who worked on this first
 also implemented a system that leveraged single-threaded deterministic pipelining to try and solve this issue.
 
-The key insight to the advantage of pipelining in this environment is that when a single thread that is processing client requests makes a request to a separate service, it must wait synchronously for the response. If this communication with the backend service takes as long as the computation that the first service must perform, this would mean that the system would be idle half the time. It is then clear that if it were possible to perform more work while waiting for the nested request's response, the performance of the system would increase.
+The key insight to the advantage of pipelining in this environment is that when a single thread that is processing client requests makes a request to a separate service, it must wait synchronously for the response. 
+If this communication with the backend service takes as long as the computation that the first service must perform, this would mean that the system would be idle half the time. 
+It is then clear that if it were possible to perform more work while waiting for the nested request's response, the performance of the system would increase.
 
-In order to build a system that performed this pipelining, the BLANK used multiple threads but only ran them one at a time and scheduled them in a deterministic way. Deterministic scheduling and only having a single execution thread guaranteed that all requests were executed deterministically, and therefore that all replicas would converge in the system without the need for checkpointing or potentially rolling back. 
+In order to build a system that performed this pipelining, the BLANK used multiple threads but only ran them one at a time and scheduled them in a deterministic way. 
+Deterministic scheduling and only having a single execution thread guaranteed that all requests were executed deterministically, and therefore that all replicas would converge in the system without the need for checkpointing or potentially rolling back. 
+
 
 \section{Initial Results}
 
-Then initial findings in terms of the performance gain that applying speculative execution had over a naive sequential implementation were quite promising. In Kapritsos' doctoral defense, he reported that the throughput of this speculative executing Adam system steadily increased with the number of cores according to the benchmarks that he ran. Even though the throughput increased, it did not seem to be scaling particularly linearly with the number of cores. Servers with 16 cores running 16 execution threads in this implementation of Adam only had about 4x the throughput of the same servers running with a single thread each.
+Then initial findings in terms of the performance gain that applying speculative execution had over a naive sequential implementation were quite promising. 
+In Kapritsos' doctoral defense, he reported that the throughput of this speculative executing Adam system steadily increased with the number of cores according to the benchmarks that he ran. 
+Even though the throughput increased, it did not seem to be scaling particularly linearly with the number of cores. 
+Servers with 16 cores running 16 execution threads in this implementation of Adam only had about 4x the throughput of the same servers running with a single thread each.
 
-The single-threaded pipelining technique described above also showed serious promise. For very short client requests (0.1ms each), the service managed to even more than the expected 2x performance gain, probably due to the backend service batching requests creating what acted in practice like an additional pipeline stage. For requests that took longer to process (1-10ms each) however, the system successfully achieved an approximately 2x throughput increase.
+The single-threaded pipelining technique described above also showed serious promise. 
+For very short client requests (0.1ms each), the service managed to even more than the expected 2x performance gain, probably due to the backend service batching requests creating what acted in practice like an additional pipeline stage. 
+For requests that took longer to process (1-10ms each) however, the system successfully achieved an approximately 2x throughput increase.
 
 
 \chapter{Multi-Threaded Pipelining in Adam}\label{AdamDesign}
 
 \section{Design Overview}
 
-The core of this work was to adapt the previous work performed on the Adam project to support both multi-threading and pipelining simultaneously. As discussed in chapter 3, initial work on Adam had yielded some promising results both in the multi-threaded non-pipelined case and the single-threaded pipelined case. In order to better understand our approach to combining these techniques. Let use first define a couple terms for clarity:
+The core of this work was to adapt the previous work performed on the Adam project to support both multi-threading and pipelining simultaneously. 
+As discussed in chapter 3, initial work on Adam had yielded some promising results both in the multi-threaded non-pipelined case and the single-threaded pipelined case. 
+In order to better understand our approach to combining these techniques. 
+Let use first define a couple terms for clarity:
 \begin{itemize}
 \item A \textbf{batch} of requests is a set of mostly non-conflicting client request to execute.
 \item A \textbf{group} of threads are threads that will run at the same time in the pipeline.
 \end{itemize}
 
-At a very high level, our approach was to adapt the existing single-threaded pipelining code to have it schedule groups of threads to run in the pipeline instead of a single thread. To manage each group of threads, we adapted the existing multi-threaded non-pipelined Adam code to allow it to behave within this pipelined environment. The following chapter will explain at length the steps we took to convert the existing code we started with, as well as the new code we had to write to make this idea a reality
+At a very high level, our approach was to adapt the existing single-threaded pipelining code to have it schedule groups of threads to run in the pipeline instead of a single thread. 
+To manage each group of threads, we adapted the existing multi-threaded non-pipelined Adam code to allow it to behave within this pipelined environment. 
+The following chapter will explain at length the steps we took to convert the existing code we started with, as well as the new code we had to write to make this idea a reality
 
 \section{Theoretical Benefits}
 
-By combining both pipelining and multi-threading, we expected our speedups over a naive replicated state machine in this system model to both scale linearly with the number of threads we were using as well as double because of the two stage pipeline. In total this meant that with the 16 core machines we had to test with, we hoped to see a 32x throughput improvement in our microbenchmarks.
+By combining both pipelining and multi-threading, we expected our speedups over a naive replicated state machine in this system model to both scale linearly with the number of threads we were using as well as double because of the two stage pipeline. 
+In total this meant that with the 16 core machines we had to test with, we hoped to see a 32x throughput improvement in our microbenchmarks.
 
 \chapter{Adam Implementation}\label{AdamImplementation}
 
 \section{Initial Code Structure}
 
-When we began our contributions to the Adam project, implementations existed for both approaches described in the previous chapter. Before explaining the work that we did to create a pipelined SMR system that used speculative execution, we will examine in detail that existing building blocks that we had to work with.
+When we began our contributions to the Adam project, implementations existed for both approaches described in the previous chapter. 
+Before explaining the work that we did to create a pipelined SMR system that used speculative execution, we will examine in detail that existing building blocks that we had to work with.
 
 \subsection{Existing Multi-Threaded Adam Implementation}
 
-The existing multi-threaded Adam implementation we started with was a modification to the existing Eve code to support nested requests. Some of the core changes involved the use of Apache's Commons Javaflow library to easily allow execution threads to rollback their state to a checkpoint, even if they are currently in the middle of executing. The other modification involved adding support for multiple checkpoints taken per batch, one after every time the execution threads ``hit a wall'', meaning that all currently executing threads were either finished with the batch or were ready to make a nested request.
+The existing multi-threaded Adam implementation we started with was a modification to the existing Eve code to support nested requests. 
+Some of the core changes involved the use of Apache's Commons Javaflow library to easily allow execution threads to rollback their state to a checkpoint, even if they are currently in the middle of executing. 
+The other modification involved adding support for multiple checkpoints taken per batch, one after every time the execution threads ``hit a wall'', meaning that all currently executing threads were either finished with the batch or were ready to make a nested request.
 
-Execution threads were controlled in this implementation by the Batch Manager (BM) which handled the logic of making sure all threads had ``hit a wall'' and initiated the checkpoint operation for each execution thread. This BM also was supposed to handle ensuring that the all replicas were at the same state at each wall, which involved sending off a hash of the replica's state and initiating a rollback if needed. When we received the code however, this work was largely not finished as the existing multi-threaded attempt was intended to simply demonstrate that speculative execution could still provide performance gains in this environment.
+Execution threads were controlled in this implementation by the Batch Manager (BM) which handled the logic of making sure all threads had ``hit a wall'' and initiated the checkpoint operation for each execution thread. 
+This BM also was supposed to handle ensuring that the all replicas were at the same state at each wall, which involved sending off a hash of the replica's state and initiating a rollback if needed. 
+When we received the code however, this work was largely not finished as the existing multi-threaded attempt was intended to simply demonstrate that speculative execution could still provide performance gains in this environment.
 
 \subsection{Sequential Pipeline Manager}
 
-The Sequential Pipeline Manager (SPM) was first implemented by Manos Kapritsos to demonstrate that pipelining had promise in this system model. The SPM in particular was the part of the system that controlled what thread was currently running and handled scheduling the next thread when the running thread desired to yield. This code was very straightforward but it served as the inspiration for the pipeline manager that we built later to schedule groups of threads.
+The Sequential Pipeline Manager (SPM) was first implemented by Manos Kapritsos to demonstrate that pipelining had promise in this system model. 
+The SPM in particular was the part of the system that controlled what thread was currently running and handled scheduling the next thread when the running thread desired to yield. 
+This code was very straightforward but it served as the inspiration for the pipeline manager that we built later to schedule groups of threads.
 
-The SPM began execution by deterministically assigning requests to each thread. Note that even though the pipeline executed sequentially, the SPM leveraged lightweight threads to simplify the scheduling process. After assigning work, the SPM notified the first thread to start. That thread would then start processing the client request until the point that it was ready to make the nested request. The running thread at this point would call a yield function on the SPM to notify it to schedule the next thread and then the running thread would immediately make a blocking call to the backend service. When the SPM received this yield notification, it notified the thread with the next higher id than the previous running thread (modulo the number of threads). Eventually, the last thread with work to do would yield the pipeline, at which point the SPM scheduled the first thread again. 
+The SPM began execution by deterministically assigning requests to each thread. 
+Note that even though the pipeline executed sequentially, the SPM leveraged lightweight threads to simplify the scheduling process. 
+After assigning work, the SPM notified the first thread to start. 
+That thread would then start processing the client request until the point that it was ready to make the nested request. 
+The running thread at this point would call a yield function on the SPM to notify it to schedule the next thread and then the running thread would immediately make a blocking call to the backend service. 
+When the SPM received this yield notification, it notified the thread with the next higher id than the previous running thread (modulo the number of threads). 
+Eventually, the last thread with work to do would yield the pipeline, at which point the SPM scheduled the first thread again. 
 
-This first thread would then either continue waiting for the nested request to complete, or would continue executing the client request to completion. When the thread completed, it notified the SPM to inform it of its progress and of the fact that it no longer needed to be scheduled. Once all threads had responded in this way, the SPM finished the batch and released the results to the clients.
+
+This first thread would then either continue waiting for the nested request to complete, or would continue executing the client request to completion. 
+When the thread completed, it notified the SPM to inform it of its progress and of the fact that it no longer needed to be scheduled. 
+Once all threads had responded in this way, the SPM finished the batch and released the results to the clients.
 
 % Maybe rename this to core components or something?
 \section{Modifications and New Code}
 
-When implementing Adam in a multi-threaded pipeline way, we decided to first combine the two existing approaches into one system in a very structured way before implementing the parts of the functionality that were not yet present. We began by adapting the Sequential Pipeline Manager to schedule groups of threads instead of just one at a time, and then modified the Batch Manager to control a group of threads and behave within the pipeline.
+When implementing Adam in a multi-threaded pipeline way, we decided to first combine the two existing approaches into one system in a very structured way before implementing the parts of the functionality that were not yet present. 
+We began by adapting the Sequential Pipeline Manager to schedule groups of threads instead of just one at a time, and then modified the Batch Manager to control a group of threads and behave within the pipeline.
 
 \subsection{The Parallel Pipeline Manager}
 
-By taking the structure of the existing SPM written by Kapritsos, we were able to build what we called the Parallel Pipeline Manager (PPM) to schedule groups of threads in the context of the pipeline. The changes that we had to make to the SPM to control groups of threads mostly centered around initialization and the correct detection of the correct time to swap groups on or off the execution pipeline.
+By taking the structure of the existing SPM written by Kapritsos, we were able to build what we called the Parallel Pipeline Manager (PPM) to schedule groups of threads in the context of the pipeline. 
+The changes that we had to make to the SPM to control groups of threads mostly centered around initialization and the correct detection of the correct time to swap groups on or off the execution pipeline.
 
-Within the SPM, a simple mechanism was used to schedule client requests to execution threads that ran one at a time in a pipelined fashion. Essentially, the SPM would assign the requests to threads by giving each thread one request before giving the first thread a second request and so on. In the PPM, we instead had to schedule requests within a batch to groups of threads and to threads within those groups. This was performed after the mixer was run on the batch, so we were able to assume that requests were mostly non-conflicting. We experimented with a couple of ways of assigning the requests to the threads but eventually found that our system worked best when we assigned every thread in the first group a request before beginning to assign requests to threads in the second group. We continued this process with the remaining groups before assigning a second request to each thread within the first group. We believe that this was the best way to assign the requests because doing so makes sure that all threads are utilized as best as possible, leveraging the multicore nature of the machine before taking advantage of the pipelining by using multiple groups.
+Within the SPM, a simple mechanism was used to schedule client requests to execution threads that ran one at a time in a pipelined fashion. 
+Essentially, the SPM would assign the requests to threads by giving each thread one request before giving the first thread a second request and so on. 
+In the PPM, we instead had to schedule requests within a batch to groups of threads and to threads within those groups. 
+This was performed after the mixer was run on the batch, so we were able to assume that requests were mostly non-conflicting. 
+We experimented with a couple of ways of assigning the requests to the threads but eventually found that our system worked best when we assigned every thread in the first group a request before beginning to assign requests to threads in the second group. 
+We continued this process with the remaining groups before assigning a second request to each thread within the first group. 
+We believe that this was the best way to assign the requests because doing so makes sure that all threads are utilized as best as possible, leveraging the multicore nature of the machine before taking advantage of the pipelining by using multiple groups.
 
-The SPM had a simple method that execution threads could call when the thread was about to make its nested request and was ready to yield the pipeline to the next thread. In the PPM, this procedure became slightly more complicated. Each execution thread made the same sort of yield request, but the result of the call was simply to update a bit in a bitarray that stored which threads were ready to yield. When the last thread in the currently active group (the group that the PPM has allowed to execute) called this yield function, it would notify the PPM's control thread which would realize that it was time to schedule a new group of threads to run. This map also had to be updated when threads no longer wanted to yield and were ready to execute again (e.g. when the nested request returned for that thread). We decided in our implementation to only allow the PPM's control thread to mark that threads no longer wanted to yield because of the following scenario. 
+The SPM had a simple method that execution threads could call when the thread was about to make its nested request and was ready to yield the pipeline to the next thread. 
+In the PPM, this procedure became slightly more complicated. 
+Each execution thread made the same sort of yield request, but the result of the call was simply to update a bit in a bitarray that stored which threads were ready to yield. 
+When the last thread in the currently active group (the group that the PPM has allowed to execute) called this yield function, it would notify the PPM's control thread which would realize that it was time to schedule a new group of threads to run. 
+This map also had to be updated when threads no longer wanted to yield and were ready to execute again (e.g. 
+when the nested request returned for that thread). 
+We decided in our implementation to only allow the PPM's control thread to mark that threads no longer wanted to yield because of the following scenario. 
 
-Imagine that in a group of four execution threads, the first thread reaches the point where it is ready to yield and makes its nested requests. Now imagine the other three threads are slightly behind and some but not all of them reach the point to yield before the nested request that the first thread made returns. If we allowed the first thread to mark that it no longer wanted to yield the pipeline, the PPM would not schedule the next group of threads to execute because not all of the threads in the group wanted to. A simple workaround for this was to only allow the PPM to mark the threads as not wanting to yield after they had been swapped off the pipeline at least one time.
+
+Imagine that in a group of four execution threads, the first thread reaches the point where it is ready to yield and makes its nested requests. 
+Now imagine the other three threads are slightly behind and some but not all of them reach the point to yield before the nested request that the first thread made returns. 
+If we allowed the first thread to mark that it no longer wanted to yield the pipeline, the PPM would not schedule the next group of threads to execute because not all of the threads in the group wanted to. 
+A simple workaround for this was to only allow the PPM to mark the threads as not wanting to yield after they had been swapped off the pipeline at least one time.
 
 \subsection{The Parallel Group Manager and Execution Threads}
 
-The second part of our system for scheduling groups of threads to run in a speculative manner was the Parallel Group Manager (PGM): the system that controlled the execution threads within a single group. It was at this layer of abstraction in our system that we handled taking checkpoints, possibly rolling back, and informing the PPM when all of the threads in the group were finished executing their assigned requests within the batch. The Batch Manager served as our starting point for this part of the implementation, as it was already designed to control multiple execution threads in the Adam environment. Some of the major modifications we had to make to the existing BM code involved making sure that the PGM was able to be scheduled on and off the pipeline controlled by the PPM, and that verification requests were made at all of the required times and that the responses were handled properly. More details about our verification modifications and how we handled rollback are described in the next subsection. 
+The second part of our system for scheduling groups of threads to run in a speculative manner was the Parallel Group Manager (PGM): the system that controlled the execution threads within a single group. 
+It was at this layer of abstraction in our system that we handled taking checkpoints, possibly rolling back, and informing the PPM when all of the threads in the group were finished executing their assigned requests within the batch. 
+The Batch Manager served as our starting point for this part of the implementation, as it was already designed to control multiple execution threads in the Adam environment. 
+Some of the major modifications we had to make to the existing BM code involved making sure that the PGM was able to be scheduled on and off the pipeline controlled by the PPM, and that verification requests were made at all of the required times and that the responses were handled properly. 
+More details about our verification modifications and how we handled rollback are described in the next subsection. 
 
-In order to make sure the PGM did not continue after being swapped off the pipeline, we simply had it communicate with the PPM to determine what the currently active group was. If the active group corresponded to the group controlled by the PGM, the PGM continued instructing the execution threads to process more requests and checkpoint if needed. If instead the PGM found that the current group was no longer its own, it simply waited until the PPM notified it to continue.
 
-We also had to make many changes to the execution threads to ensure that they behaved in this new parallel pipeline environment. In particular, we had to ensure that the execution threads made the appropriate calls into the PPM to notify it when they were ready to yield and that the threads ensured that it was their owning group's turn to execute in the pipeline before proceeding with their executions.
+In order to make sure the PGM did not continue after being swapped off the pipeline, we simply had it communicate with the PPM to determine what the currently active group was. 
+If the active group corresponded to the group controlled by the PGM, the PGM continued instructing the execution threads to process more requests and checkpoint if needed. 
+If instead the PGM found that the current group was no longer its own, it simply waited until the PPM notified it to continue.
+
+We also had to make many changes to the execution threads to ensure that they behaved in this new parallel pipeline environment. 
+In particular, we had to ensure that the execution threads made the appropriate calls into the PPM to notify it when they were ready to yield and that the threads ensured that it was their owning group's turn to execute in the pipeline before proceeding with their executions.
 
 \subsection{Verification Stage and Rollback}
 
-When we inherited the original Adam approach implementation, the verification stage had yet to be converted from its original behavior within Eve. In Eve, the system was required to send out a verification message at the end of the computation of a batch to ensure that all replicas converged. In Adam however, a verification request is needed before any execution thread makes a nested request as well as at the end of the batch.
+When we inherited the original Adam approach implementation, the verification stage had yet to be converted from its original behavior within Eve. 
+In Eve, the system was required to send out a verification message at the end of the computation of a batch to ensure that all replicas converged. 
+In Adam however, a verification request is needed before any execution thread makes a nested request as well as at the end of the batch.
 
-In order to make this modification, we first had to add a second message processing thread to the system that could concurrently process the responses from a verification stage while also processing client requests. This was mostly an implementation detail but we do suspect that each control thread we add to the system reduces the scalability of the system as we approach maximum utilization of our machines. When the verification response was received from the verifiers by the execution replicas, they would process the response and determine whether they needed to rollback, receive a state transfer, or could safely continue executing. Details about how our system handled rollback responses to verification requests can be found in the next section.
+In order to make this modification, we first had to add a second message processing thread to the system that could concurrently process the responses from a verification stage while also processing client requests. 
+This was mostly an implementation detail but we do suspect that each control thread we add to the system reduces the scalability of the system as we approach maximum utilization of our machines. 
+When the verification response was received from the verifiers by the execution replicas, they would process the response and determine whether they needed to rollback, receive a state transfer, or could safely continue executing. 
+Details about how our system handled rollback responses to verification requests can be found in the next section.
 
 \section{Rollback and Correctness Guarantees}
 
-In this parallel pipeline system we must be prepared to rollback the state of the replica to one that all replicas agree on in the event that the speculative execution causes a divergence. Note that because we always ensure that all replicas are in the same state immediately before making any nested request, this means that the state that we must rollback to is right before some execution threads make a nested request or right at the beginning of the batch. If it is the later, rollback is trivial, we simply must throw away all work performed so far and execute in a sequential deterministic manner to guarantee that progress is made and that all replicas converge.
+In this parallel pipeline system we must be prepared to rollback the state of the replica to one that all replicas agree on in the event that the speculative execution causes a divergence. 
+Note that because we always ensure that all replicas are in the same state immediately before making any nested request, this means that the state that we must rollback to is right before some execution threads make a nested request or right at the beginning of the batch. 
+If it is the later, rollback is trivial, we simply must throw away all work performed so far and execute in a sequential deterministic manner to guarantee that progress is made and that all replicas converge.
 
-If instead we rollback to right before the threads in a group make a nested request, our system must restore the state of all execution threads to the state they had before making these requests and switch into a sequential deterministic mode to ensure progress and convergence. We use Apache's Commons Javaflow library, specifically the Continuations objects in this library, to keep track of the stack of each execution thread so that we can restore this stack and guarantee that all execution threads are in the exact state they were in right before they made their nested request. These Continuation objects with the stack of each thread are stored in the Merkle tree data structure that Eve used which allows the replicas to make sure that they also have the same recorded stacks for each execution thread whenever a verification is performed. This also allows replicas to receive continuations in a state transfer and immediately start the execution threads at the same point in the execution. 
+If instead we rollback to right before the threads in a group make a nested request, our system must restore the state of all execution threads to the state they had before making these requests and switch into a sequential deterministic mode to ensure progress and convergence. 
+We use Apache's Commons Javaflow library, specifically the Continuations objects in this library, to keep track of the stack of each execution thread so that we can restore this stack and guarantee that all execution threads are in the exact state they were in right before they made their nested request. 
+These Continuation objects with the stack of each thread are stored in the Merkle tree data structure that Eve used which allows the replicas to make sure that they also have the same recorded stacks for each execution thread whenever a verification is performed. 
+This also allows replicas to receive continuations in a state transfer and immediately start the execution threads at the same point in the execution. 
 
-After performing a rollback in the non-trivial case, the threads in the now current group will either re-execute their request (if a response was never received) or will read the result from a cache if a response was received. Since we know that all execution threads were in the same state before making this request, we know that the request that each thread makes must be exactly the same, thereby eliminating the issue that Eve has in this environment with making requests that can never be repeated after rolling back.
+
+After performing a rollback in the non-trivial case, the threads in the now current group will either re-execute their request (if a response was never received) or will read the result from a cache if a response was received. 
+Since we know that all execution threads were in the same state before making this request, we know that the request that each thread makes must be exactly the same, thereby eliminating the issue that Eve has in this environment with making requests that can never be repeated after rolling back.
 
 \section{Future Work}
 
-One proposed improvement to the above design that we did not implement was an optimization in the verification process. The idea is to combine the nested requests with the verification requests, eliminating the need for the verifiers and this extra round trip. This approach does however require that the backend service is aware that the service making nested requests is running our Adam system while our current implementation does not. In practice, we found that this round trip was not the bottleneck of the system, but this improvement could still easily be made.
+One proposed improvement to the above design that we did not implement was an optimization in the verification process. 
+The idea is to combine the nested requests with the verification requests, eliminating the need for the verifiers and this extra round trip. 
+This approach does however require that the backend service is aware that the service making nested requests is running our Adam system while our current implementation does not. 
+In practice, we found that this round trip was not the bottleneck of the system, but this improvement could still easily be made.
 
-As shown in the evaluation section, we did find that our system had much better performance gains on longer client requests than shorter ones due to the overhead that the additional checkpoints incurs in the form of additional Merkle tree computations. We believe that the system could be modified to minimize the total number of checkpoints needed by making much larger groups and not checkpointing until all of the requests in these larger groups are ready to make the nested request.
+As shown in the evaluation section, we did find that our system had much better performance gains on longer client requests than shorter ones due to the overhead that the additional checkpoints incurs in the form of additional Merkle tree computations. 
+We believe that the system could be modified to minimize the total number of checkpoints needed by making much larger groups and not checkpointing until all of the requests in these larger groups are ready to make the nested request.
 
 \chapter{Evaluation and Results}\label{AdamResults}
 
-When we finished implementing Adam as described above, we were dismayed to find that our throughput increase numbers were much lower than we had hoped. In fact for a variety of reasons, we first saw that using 8 threads in Adam only resulted in less than a 4x throughput increase over the simple sequential implementation. We then took a methodical journey through several heinous bugs and the intricacies of this design until we arrived at much more satisfying performance results. For details on the approach we took to correcting our implementation, and more about the problem that we are trying to solve in general, please read Jim Given's thesis.
+When we finished implementing Adam as described above, we were dismayed to find that our throughput increase numbers were much lower than we had hoped. 
+In fact for a variety of reasons, we first saw that using 8 threads in Adam only resulted in less than a 4x throughput increase over the simple sequential implementation. 
+We then took a methodical journey through several heinous bugs and the intricacies of this design until we arrived at much more satisfying performance results. 
+For details on the approach we took to correcting our implementation, and more about the problem that we are trying to solve in general, please read Jim Given's thesis.
 
 \chapter{Related Work}\label{RelatedWork}
 
 \chapter{Conclusion}\label{Conclusion}
 
-We have presented a novel approach to providing the replicated state machine abstraction in an environment with communicating services that leverages both the multicore nature of today's machines and pipelining techniques to improve resource utilization. We found through the use of microbenchmarks that our design and implementation allows a workload of heavy requests to scale up to 21.8x the throughput of a naive sequential implementation in a non-replicated setting with 16 core machines, or up to 13.0x the throughput in a replicated setting with 8 cores per execution server.
+We have presented a novel approach to providing the replicated state machine abstraction in an environment with communicating services that leverages both the multicore nature of today's machines and pipelining techniques to improve resource utilization. 
+We found through the use of microbenchmarks that our design and implementation allows a workload of heavy requests to scale up to 21.8x the throughput of a naive sequential implementation in a non-replicated setting with 16 core machines, or up to 13.0x the throughput in a replicated setting with 8 cores per execution server.
 
 \end{document}
