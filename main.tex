@@ -142,34 +142,31 @@ Eve was shown to outperform Remus by a factor of 4.7x while using orders of magn
 
 \chapter{Adam: State Machine Replication with Interacting Services}\label{Adam}
 
-In the last chapter we saw that the replicated state machine abstraction could be used with in a parallel environment with serious performance improvements in terms of request throughput. 
-This approach successfully leverages the multicore nature of today's machines, but it is not easily extended to allow for services to communicate at first glance. 
-Systems today are rarely well described by the simple client-server model. 
+In the last chapter we saw that the replicated state machine abstraction can be used with in a parallel environment with serious performance improvements in terms of request throughput. 
+Systems today are rarely well described by the simple client-server model.
 Instead, most services need to interact with other services while processing a request from a client. 
+For example, if a client visits the website Dropbox.com, the server handling the clients request needs to make what we will refer to as a ``nested request'' to a separate service. This nested request functions to retrieve the names of the client's files, before sending the contents of the webpage back to the client. 
 
-
-For example, if a client visits the website Dropbox.com, the server handling the clients request needs to make a nested request to a separate service to retrieve the names of the client's files, before sending the contents of the webpage back to the client. 
-In this chapter, we will explore the previous work that was performed to convert the Eve system to work in this new environment, one where servers not only expose their states to clients, but also to other services through nested requests. 
-This project was named Adam by the the same group that presented the Eve system.
+Eve's approach to multi-threaded SMR successfully leverages the multicore nature of today's machines, but it is not immediately clear how to extend such a system to allow for replicated services to communicate. 
+In this chapter, we will explore the previous work that was performed to convert the Eve system to work in this new environment, one where servers not only expose their states to clients, but also to other services through nested requests.
 
 \section{Initial Approaches}
 
 Before describing Adam, it is important to understand why speculative execution approaches such as Eve do not work in this environment with communicated services. 
 Consider a service $A$ that is using Eve and is processing client requests. 
 While processing some of the client requests service $A$ receives, it must make a call to service $B$. 
-Now suppose that due to the speculative nature of Eve, too many replicas diverge while processing this client request and all replicas need to rollback to their state before and try again in a sequential manner. 
+Now suppose that due to the speculative nature of Eve, too many replicas diverge while processing this client request. In Eve, this causes all replicas to rollback to their state before they began processing the client requests and try again in a sequential manner. 
 At this point, the request that service $A$ made to $B$ has already happened and cannot be rolled back. 
 If service $B$ had clients of its own, they could see the result of this nested request even after service $A$ tried again. 
 Worse still, when service $A$ re-executes the requests sequentially, there is no guarantee that it makes exactly the same nested request. 
-Non-determinism caused by thread interleaving could result in a nested request made for the same client request that is different from the nested request that would be made when processing sequentially.
+Non-determinism caused by thread interleaving could result in a nested request made as a result of the same client request that is different from the nested request that would be made when processing sequentially.
 
-This well known problem is known as the output-commit problem. 
-A very simple solution to the problem is to always take a snapshot before "outputting" or exposing internal state to any outside observer. 
-The first attempt to convert Eve to work in this setting took exactly this approach, and is described in the following subsection. 
-A separate idea to overcome this difficulty was to simply run in a deterministic and sequential manner, but to leverage deterministic pipelining for increased performance. 
-With this idea, Adam would not be speculative and no rollback would ever be needed to maintain correctness.
+This well known problem is known as the output-commit problem and a very simple solution to the problem is to always take a snapshot before producing output or exposing internal state to any outside observer. 
+The first attempt to convert Eve to work in this communicating services setting took exactly this approach, and is described in \ref{EveModification}. 
+A separate idea to achieve higher performance in this setting was to simply run in a deterministic and sequential manner, but to leverage deterministic pipelining for increased performance. 
+With this idea, Adam would also not be speculative and no rollback would ever be needed to maintain correctness. This second approach is described in \ref{STP}.
 
-\subsection{Eve Modification}
+\subsection{Eve Modification}\label{EveModification}
 
 In an effort to leverage the performance gains that speculative execution approaches such as Eve promised, the first attempt to construct Adam focused on solving the output-commit problem that Eve faced in this environment. 
 To do this, the 
@@ -184,7 +181,7 @@ When the execution threads arrive at the part of processing the client request t
 After the last thread reaches such a point in the request processing, the system computes a hash of its state in exactly the same way that Eve ensured all replicas were the same at the end of processing an entire batch. 
 If all replicas were in the same state after processing these prefixes of the client requests, the threads could safely make their nested requests and continue executing until the next such time, or until the end of their last request.
 
-\subsection{Single-Threaded Pipelining}
+\subsection{Single-Threaded Pipelining}\label{STP}
 
 A completely separate way to solve this output-commit problem is to simply not execute in a speculative manner. 
 The
