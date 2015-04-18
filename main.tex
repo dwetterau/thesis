@@ -1,5 +1,7 @@
 \documentclass[11pt, oneside]{report}
 \usepackage[utf8]{inputenc}
+\usepackage{graphicx}
+\usepackage{float}
 
 \title{Communicating Replicated State Machines}
 \author{David Wetterau}
@@ -145,7 +147,14 @@ Eve was shown to outperform Remus by a factor of 4.7x while using orders of magn
 In the last chapter we saw that the replicated state machine abstraction can be used with in a parallel environment with serious performance improvements in terms of request throughput. 
 Systems today are rarely well described by the simple client-server model.
 Instead, most services need to interact with other services while processing a request from a client. 
-For example, if a client visits the website Dropbox.com, the server handling the clients request needs to make what we will refer to as a ``nested request'' to a separate service. This nested request functions to retrieve the names of the client's files, before sending the contents of the webpage back to the client. 
+
+For example, if a client visits the website Dropbox.com, the server handling the clients request needs to make what we will refer to as a ``nested request'' to a separate service. This nested request functions to retrieve the names of the client's files, before sending the contents of the webpage back to the client. In Figure \ref{anatomy} you can think of the local computation as the time that the webserver spends rendering the HTML to return and the remote computation as the remote (or backend) service loading the user's files.
+
+\begin{figure}[h]
+\centering
+\includegraphics[width=0.5\textwidth]{RequestAnatomy.png}
+\caption{\label{anatomy}The anatomy of a client request that must perform a nested request. The dark line in the middle will be used to indicate a checkpoint operation.}
+\end{figure}
 
 Eve's approach to multi-threaded SMR successfully leverages the multicore nature of today's machines, but it is not immediately clear how to extend such a system to allow for replicated services to communicate. 
 In this chapter, we will explore the previous work that was performed to convert the Eve system to work in this new environment, one where servers not only expose their states to clients, but also to other services through nested requests.
@@ -166,20 +175,38 @@ The first attempt to convert Eve to work in this communicating services setting 
 A separate idea to achieve higher performance in this setting was to simply run in a deterministic and sequential manner, but to leverage deterministic pipelining for increased performance. 
 With this idea, Adam would also not be speculative and no rollback would ever be needed to maintain correctness. This second approach is described in \ref{STP}.
 
+\subsection{Naive Sequential Implementation}
+
+The simplest way to imagine implementing SMR in this environment would be to use the typical agree-execute approach.
+This approach would work, however we will see in the next few sections that we can do much better. 
+Figure \ref{NaiveSequential} shows what such an implementation would look like if it were executing $12$ client requests. 
+Since agree-execute does not use speculative execution, no checkpoints are needed in this approach but you can clearly see that while remote computation is happening, no local computation can be performed.
+As a result, the execution of $12$ client requests that require an equal amount of work on the local and remote services (a simplification we will use for ease of explanation) takes $24$ time slices.
+
+\begin{figure}[h]
+\centering
+\includegraphics[width=0.85\textwidth]{NaiveSequential.png}
+\caption{\label{NaiveSequential}An example execution of $12$ client requests with a naive sequential implementation. No checkpoints are needed for this approach.}
+\end{figure}
+
 \subsection{Eve Modification}\label{EveModification}
 
 In an effort to leverage the performance gains that speculative execution approaches such as Eve promised, the first attempt to construct Adam focused on solving the output-commit problem that Eve faced in this environment. 
-To do this, the 
-BLANK %Idk what to put here to describe the UTCS people who worked on this first
-simply modified the existing Eve implementation to take checkpoints before making nested requests. 
-
-
-% Diagram here or something about all hitting the wall at the same time
+To do this, the initial Adam contributors at UT Austin simply modified the existing Eve implementation to take checkpoints before making nested requests. 
 
 Consider an Eve system with two execution threads processing client requests in a speculative manner. 
-When the execution threads arrive at the part of processing the client request that requires a nested request to another service, they inform the system of their project and wait. 
+When the execution threads arrive at the part of processing the client request that requires a nested request to another service, they inform the system of their progress and wait. 
 After the last thread reaches such a point in the request processing, the system computes a hash of its state in exactly the same way that Eve ensured all replicas were the same at the end of processing an entire batch. 
 If all replicas were in the same state after processing these prefixes of the client requests, the threads could safely make their nested requests and continue executing until the next such time, or until the end of their last request.
+
+\begin{figure}[h]
+\centering
+\includegraphics[width=0.85\textwidth]{Parallel.png}
+\caption{\label{parallel}An example execution of $12$ client requests with the modified Eve parallel approach. For $12$ requests on $2$ execution threads, $12$ time slices are used and $7$ total checkpoints are performed.}
+\end{figure}
+
+Figure \ref{parallel} Shows what an execution of $12$ client requests would look like with this implementation using $2$ execution threads. 
+Notice that checkpoints are taken right before the execution threads begin to make their nested requests to the remote service. Also notice that an additional checkpoint is needed at the end and that this implementation would finish the batch of requests in just $12$ time slices compared to the $24$ that the naive approach requires.
 
 \subsection{Single-Threaded Pipelining}\label{STP}
 
