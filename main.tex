@@ -426,6 +426,45 @@ In fact for a variety of reasons, we first saw that using 8 threads in Adam only
 We then took a methodical journey through several heinous bugs and the intricacies of this design until we arrived at much more satisfying performance results. 
 For details on the approach we took to correcting our implementation, and more about the problem that we are trying to solve in general, please read Jim Given's thesis.
 
+The evaluation presented here was performed on a testbed of several Dell PowerEdge R200 4x 2.4GHz Intel Xeon machines and three Dell PowerEdge R515 16x 3.2GHz AMD Opteron machines. 
+We used the 16 core (R515) machines as our execution replicas and the 4 core (R200) machines as our verifier, client, and filter machines. 
+Because we only had three 16 core machines, we were only able to perform scaling studies up to 16 cores in an unreplicated setting (meaning we tolerated no faulty execution replicas) with one 16 core machine as the local replica and another as the remote service. 
+For these unreplicated studies, only the execution nodes were not replicated, all verifier machines were still replicated in the same way.
+The other studies described in this setting were performed by using each 16 core machine as both a 8 core local replica and an 8 core remote replica which constrained us to only being able to test in a full setting (with $f = 1$) with up to 8 execution threads.
+
+\begin{figure}[h]
+\centering
+\includegraphics[width=0.85\textwidth]{RequestAnatomy.png}
+\caption{\label{scaling}Adam speedup over single group, single thread performance for small, medium, and large requests.}
+\end{figure}
+
+One of our chief concerns when evaluating the performance of our system was to see how the system scaled with additional parallel execution threads. Figure \ref{scaling} shows the factor of throughput increase that we achieve by adding more execution threads to our system in an unreplicated environment. 
+These numbers were obtained by running our system with three groups of $n$ threads each where $n$ is the number found on the horizontal axis. 
+We then took the average saturated throughput of the system for each number of threads and divided it by the throughput that the system obtains with a single group of just one thread. 
+As mentioned in Chapter \ref{AdamDesign}, we expected the theoretical maximum benefit of our system to have 32 times the throughput of the baseline, gaining a factor of 16 improvement from utilizing 16 cores and then doubling the throughput due to the two stage pipeline.
+We come the closest to this theoretical maximum with large (10 ms local computation and 10ms remote computation) requests because the computation time helps mask the overhead introduced by the checkpointing and the verification stage.
+We miss this mark by progressively more for shorter requests as the overhead becomes more pronounced.
+
+\begin{figure}[h]
+\centering
+\includegraphics[width=0.85\textwidth]{RequestAnatomy.png}
+\caption{\label{scalingmedmerkletree}Adam speedup over single group, single thread performance for small, medium, and large requests.}
+\end{figure}
+
+The Merkle tree implementation that we used appears to be the main source of overhead in this system which can be seen in Figure \ref{scalingmedmerkletree}. 
+In this graph, we compare the scaling behavior of the unreplicated system when using a real Merkle tree implementation to when we use a fake Merkle tree.
+With the fake Merkle tree, we still perform the round trip for agreement, but all hashing and checkpointing operations are instant.
+As a result, we believe that there is still room for improvement for requests that aren't as large through optimizations in how the Merkle tree. 
+This could be through better detection of new objects in the replica that must be hashed or more intelligent space allocation within the tree itself.
+
+\begin{figure}[h]
+\centering
+\includegraphics[width=0.85\textwidth]{RequestAnatomy.png}
+\caption{\label{head2head}Latency-Throughput graphs of Adam for large requests with all four approaches.}
+\end{figure}
+
+We also compared our Adam implementation head to head with the previous two approaches described in Chapter \ref{Adam} as well as a naive sequential implementation. Figure \ref{head2head} shows latency throughput graphs for our implementation running with three groups of eight threads each in a fully replicated environment. We compare our implementation in this graph to the multithreaded but non-pipelined approach running with 8 threads, and with the sequential-pipelined approach running with three threads (which is equivalent to our implementation using three groups).
+
 \chapter{Related Work}\label{RelatedWork}
 
 \chapter{Conclusion}\label{Conclusion}
