@@ -211,17 +211,22 @@ Notice that checkpoints are taken right before the execution threads begin to ma
 \subsection{Single-Threaded Pipelining}\label{STP}
 
 A completely separate way to solve this output-commit problem is to simply not execute in a speculative manner. 
-The
-BLANK %Idk what to put here to describe the UTCS people who worked on this first
-also implemented a system that leveraged single-threaded deterministic pipelining to try and solve this issue.
+The original contributors to Adam also implemented a system that leveraged single-threaded deterministic pipelining to try and solve this issue.
 
 The key insight to the advantage of pipelining in this environment is that when a single thread that is processing client requests makes a request to a separate service, it must wait synchronously for the response. 
-If this communication with the backend service takes as long as the computation that the first service must perform, this would mean that the system would be idle half the time. 
+If this communication with the remote service takes as long as the computation that the first service must perform, the system would be idle half the time.
 It is then clear that if it were possible to perform more work while waiting for the nested request's response, the performance of the system would increase.
 
-In order to build a system that performed this pipelining, the BLANK used multiple threads but only ran them one at a time and scheduled them in a deterministic way. 
-Deterministic scheduling and only having a single execution thread guaranteed that all requests were executed deterministically, and therefore that all replicas would converge in the system without the need for checkpointing or potentially rolling back. 
+\begin{figure}[h]
+\centering
+\includegraphics[width=0.85\textwidth]{SequentialPipelined.png}
+\caption{\label{seqpipe}An example execution of $12$ client requests with the single-threaded pipelining approach. For $12$ requests on $2$ execution threads, $13$ time slices are used and no checkpoints are performed because all execution is deterministic.}
+\end{figure}
 
+In order to build a system that performed this pipelining, the researchers used multiple threads but only ran them one at a time and scheduled them in a deterministic way. 
+Deterministic scheduling and only having a single execution thread guaranteed that all requests were executed deterministically, and therefore that all replicas converge in the system without the need for checkpointing or potentially rolling back.
+
+In figure \ref{seqpipe} you can see the execution of $12$ client requests in a single-threaded pipelined system. Notice that the grey squares indicate local computation, or that the replica machine is actually doing work. Only one thread is ever performing local computation at a time (guaranteeing determinism), but because of pipelining, the total number of time slices is cut almost in half over the naive approach.
 
 \section{Initial Results}
 
