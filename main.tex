@@ -149,7 +149,7 @@ In the last chapter we saw that the replicated state machine abstraction can be 
 Systems today are rarely well described by the simple client-server model.
 Instead, most services need to interact with other services while processing a request from a client. 
 
-For example, if a client visits the website Dropbox.com, the server handling the client's request needs to make what we will refer to as a ``nested request'' to a separate service. This nested request functions to retrieve the names of the client's files, before sending the contents of the webpage back to the client. Figure \ref{anatomy} shows the anatomy of a client request that we will be considering for the for the rest of this paper. In the figure, you can think of the local computation as the time that the webserver spends rendering the HTML to return and the remote computation as the remote (or backend) service loading the user's files for this example.
+For example, if a client visits the website Dropbox.com, the server handling the client's request needs to make what we will refer to as a ``nested request'' to a separate service. This nested request functions to retrieve the names of the client's files, before sending the contents of the webpage back to the client. Figure \ref{anatomy} shows the anatomy of a client request that we will be considering for the for the rest of this paper. In the figure, you can think of the local computation as the time that the webserver spends rendering the HTML to return and the remote computation as the remote service loading the user's files for this example.
 
 \begin{figure}[h]
 \centering
@@ -239,7 +239,7 @@ Even though the throughput increased, it did not seem to be scaling particularly
 Servers with 16 cores running 16 execution threads in this implementation of Adam only had about 4x the throughput of the same servers running with a single thread each.
 
 The single-threaded pipelining technique described above also showed great potential. 
-For very short client requests (0.1ms each), the service managed to achieve even more than the expected 2x performance gain, probably due to the backend service batching requests creating what acted in practice like an additional pipeline stage. 
+For very short client requests (0.1ms each), the service managed to achieve even more than the expected 2x performance gain, probably due to the remote service batching requests creating what acted in practice like an additional pipeline stage. 
 For requests that took longer to process (1-10ms each) however, the system successfully achieved an approximately 2x throughput increase due to the 2 stage nature of the pipeline: the first being the local computation and the second being the computation on the remote service.
 
 \chapter{Multi-Threaded Pipelining in Adam}\label{AdamDesign}
@@ -295,45 +295,46 @@ Our pipelined implementation would require only $13$ slices: $24$ requests / $4$
 
 \chapter{Adam Implementation}\label{AdamImplementation}
 
-\section{Initial Code Structure}
+\section{Initial Code Structure}\label{existing}
 
 When we began our contributions to the Adam project, implementations existed for both approaches described in Chapter \ref{Adam}. 
 Before explaining the work that we did to create a pipelined SMR system that used speculative execution, we will examine in detail that existing building blocks that we used to construct our final implementation.
 
 \subsection{Existing Multi-Threaded Adam Implementation}
 
-The existing multi-threaded Adam implementation we started with was a modification to the existing Eve code to support nested requests. 
+The existing multi-threaded Adam implementation we started with was a modification to the existing Eve code that allowed the code to perform nested requests. 
 Some of the core changes involved the use of Apache's Commons Javaflow library to easily allow execution threads to rollback their state to a checkpoint, even if they are currently in the middle of executing. 
-The other modification involved adding support for multiple checkpoints taken per batch, one after every time the execution threads ``hit a wall'', meaning that all currently executing threads were either finished with the batch or were ready to make a nested request.
+The other modifications to Eve involved adding support for multiple checkpoints taken per batch, one after every time the execution threads ``hit a wall'', meaning that all currently active execution threads were either finished with the entire batch of requests or were ready to make a nested request.
 
 Execution threads were controlled in this implementation by the Batch Manager (BM) which handled the logic of making sure all threads had ``hit a wall'' and initiated the checkpoint operation for each execution thread. 
-This BM also was supposed to handle ensuring that the all replicas were at the same state at each wall, which involved sending off a hash of the replica's state and initiating a rollback if needed. 
+This BM was also intended to handle ensuring that the all replicas were at the same state at each wall, which involved sending off a hash of the replica's state and initiating a rollback if needed. 
 When we received the code however, this work was largely not finished as the existing multi-threaded attempt was intended to simply demonstrate that speculative execution could still provide performance gains in this environment.
 
 \subsection{Sequential Pipeline Manager}
 
-The Sequential Pipeline Manager (SPM) was first implemented by Manos Kapritsos to demonstrate that pipelining had promise in this system model. 
-The SPM in particular was the part of the system that controlled what thread was currently running and handled scheduling the next thread when the running thread desired to yield. 
+The Sequential Pipeline Manager (SPM) was first implemented by Manos Kapritsos to demonstrate that the single-threaded pipelining approach had promise in this system model. 
+The SPM in particular was the part of the system that controlled what execution thread was currently running and handled scheduling the next thread when the running thread desired to yield.
+This meant that the SPM was also responsible for enforcing the condition that only one execution was running at any point in time and that all execution was deterministic.
 This code was very straightforward but it served as the inspiration for the pipeline manager that we built later to schedule groups of threads.
 
-The SPM began execution by deterministically assigning requests to each thread. 
-Note that even though the pipeline executed sequentially, the SPM leveraged lightweight threads to simplify the scheduling process. 
+The SPM began the execution of a batch of requests by deterministically assigning requests to each thread.
+Note that even though the pipeline executed sequentially, the SPM used many lightweight threads to simplify the scheduling process. 
 After assigning work, the SPM notified the first thread to start. 
 That thread would then start processing the client request until the point that it was ready to make the nested request. 
-The running thread at this point would call a yield function on the SPM to notify it to schedule the next thread and then the running thread would immediately make a blocking call to the backend service. 
-When the SPM received this yield notification, it notified the thread with the next higher id than the previous running thread (modulo the number of threads). 
+The running thread at this point would call a yield function in the SPM to notify it to schedule the next thread and then the running thread would immediately make a blocking call to the remote service. 
+When the SPM received this yield notification, it notified the thread to begin execution again with the next higher id than the previous running thread (modulo the number of threads). 
 Eventually, the last thread with work to do would yield the pipeline, at which point the SPM scheduled the first thread again. 
 
-
 This first thread would then either continue waiting for the nested request to complete, or would continue executing the client request to completion. 
-When the thread completed, it notified the SPM to inform it of its progress and of the fact that it no longer needed to be scheduled. 
+When the thread completed processing the current request, it notified the SPM to inform it of its progress and of the fact that it no longer needed to be scheduled. 
 Once all threads had responded in this way, the SPM finished the batch and released the results to the clients.
 
 % Maybe rename this to core components or something?
-\section{Modifications and New Code}
+\section{Core Components}
 
-When implementing Adam in a multi-threaded pipeline way, we decided to first combine the two existing approaches into one system in a very structured way before implementing the parts of the functionality that were not yet present. 
+When implementing Adam with the multi-threaded pipelined approach, we decided to first combine the two existing approaches into one system (described in \ref{existing}) in a very structured way before implementing the parts of the functionality that were not yet present. 
 We began by adapting the Sequential Pipeline Manager to schedule groups of threads instead of just one at a time, and then modified the Batch Manager to control a group of threads and behave within the pipeline.
+After these modifications, we finished implementing parts of Adam that had not been implemented before such as the verification stage and made appropriate modifications to other existing parts of the code base to support both multi-threading and pipelining simultaneously.
 
 \subsection{The Parallel Pipeline Manager}
 
