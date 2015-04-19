@@ -1,7 +1,8 @@
 \documentclass[11pt, oneside]{report}
 \usepackage[utf8]{inputenc}
-\usepackage{graphicx}
+\usepackage{amsmath}
 \usepackage{float}
+\usepackage{graphicx}
 
 \title{Communicating Replicated State Machines}
 \author{David Wetterau}
@@ -148,16 +149,16 @@ In the last chapter we saw that the replicated state machine abstraction can be 
 Systems today are rarely well described by the simple client-server model.
 Instead, most services need to interact with other services while processing a request from a client. 
 
-For example, if a client visits the website Dropbox.com, the server handling the clients request needs to make what we will refer to as a ``nested request'' to a separate service. This nested request functions to retrieve the names of the client's files, before sending the contents of the webpage back to the client. In Figure \ref{anatomy} you can think of the local computation as the time that the webserver spends rendering the HTML to return and the remote computation as the remote (or backend) service loading the user's files.
+For example, if a client visits the website Dropbox.com, the server handling the client's request needs to make what we will refer to as a ``nested request'' to a separate service. This nested request functions to retrieve the names of the client's files, before sending the contents of the webpage back to the client. Figure \ref{anatomy} shows the anatomy of a client request that we will be considering for the for the rest of this paper. In the figure, you can think of the local computation as the time that the webserver spends rendering the HTML to return and the remote computation as the remote (or backend) service loading the user's files for this example.
 
 \begin{figure}[h]
 \centering
 \includegraphics[width=0.5\textwidth]{RequestAnatomy.png}
-\caption{\label{anatomy}The anatomy of a client request that must perform a nested request. The dark line in the middle will be used to indicate a checkpoint operation.}
+\caption{\label{anatomy}The anatomy of a client request that must perform a nested request. The dark line in the middle will be used to indicate a checkpoint operation. We will say that a request requires $2$ time slices to complete for simplicity: the first for the local computation and an equal amount of time for the remote computation.}
 \end{figure}
 
 Eve's approach to multi-threaded SMR successfully leverages the multicore nature of today's machines, but it is not immediately clear how to extend such a system to allow for replicated services to communicate. 
-In this chapter, we will explore the previous work that was performed to convert the Eve system to work in this new environment, one where servers not only expose their states to clients, but also to other services through nested requests.
+In this chapter, we will explore the previous work that was performed to convert the Eve system to work in this new environment: one where servers not only expose their states to clients, but also to other services through nested requests.
 
 \section{Initial Approaches}
 
@@ -206,14 +207,16 @@ If all replicas were in the same state after processing these prefixes of the cl
 \end{figure}
 
 Figure \ref{parallel} Shows what an execution of $12$ client requests would look like with this implementation using $2$ execution threads. 
-Notice that checkpoints are taken right before the execution threads begin to make their nested requests to the remote service. Also notice that an additional checkpoint is needed at the end and that this implementation would finish the batch of requests in just $12$ time slices compared to the $24$ that the naive approach requires.
+Notice that checkpoints are taken right before the execution threads begin to make their nested requests to the remote service. 
+Also notice that an additional checkpoint is needed at the end to make sure all replicas converge at the end of the batch.
+This implementation would finish the batch of $12$ requests in just $12$ time slices compared to the $24$ that the naive approach requires.
 
 \subsection{Single-Threaded Pipelining}\label{STP}
 
-A completely separate way to solve this output-commit problem is to simply not execute in a speculative manner. 
+A completely separate way to solve the output-commit problem in this environment is to simply not execute in a speculative manner. 
 The original contributors to Adam also implemented a system that leveraged single-threaded deterministic pipelining to try and solve this issue.
 
-The key insight to the advantage of pipelining in this environment is that when a single thread that is processing client requests makes a request to a separate service, it must wait synchronously for the response. 
+The advantage of pipelining in this environment is that when a single thread is processing client requests and makes a request to a separate service, it must wait synchronously for the response. 
 If this communication with the remote service takes as long as the computation that the first service must perform, the system would be idle half the time.
 It is then clear that if it were possible to perform more work while waiting for the nested request's response, the performance of the system would increase.
 
@@ -224,50 +227,78 @@ It is then clear that if it were possible to perform more work while waiting for
 \end{figure}
 
 In order to build a system that performed this pipelining, the researchers used multiple threads but only ran them one at a time and scheduled them in a deterministic way. 
-Deterministic scheduling and only having a single execution thread guaranteed that all requests were executed deterministically, and therefore that all replicas converge in the system without the need for checkpointing or potentially rolling back.
+Deterministic scheduling and only having a single execution thread running at any point in time guaranteed that all requests were executed deterministically, and therefore that all replicas in the system converge without the need for checkpointing or potentially rolling back.
 
-In figure \ref{seqpipe} you can see the execution of $12$ client requests in a single-threaded pipelined system. Notice that the grey squares indicate local computation, or that the replica machine is actually doing work. Only one thread is ever performing local computation at a time (guaranteeing determinism), but because of pipelining, the total number of time slices is cut almost in half over the naive approach.
+In figure \ref{seqpipe} you can see the execution of $12$ client requests in a single-threaded pipelined system. Notice that the grey rectangles indicate local computation, or that the replica machine is actually performing work locally. Only one thread is ever performing local computation at a time (guaranteeing determinism), but because of pipelining, the total number of time slices is cut almost in half over the naive approach.
 
 \section{Initial Results}
 
-Then initial findings in terms of the performance gain that applying speculative execution had over a naive sequential implementation were quite promising. 
+The initial findings in terms of the performance gain that applying speculative execution had over a naive sequential implementation were quite promising. 
 In Kapritsos' doctoral defense, he reported that the throughput of this speculative executing Adam system steadily increased with the number of cores according to the benchmarks that he ran. 
 Even though the throughput increased, it did not seem to be scaling particularly linearly with the number of cores. 
 Servers with 16 cores running 16 execution threads in this implementation of Adam only had about 4x the throughput of the same servers running with a single thread each.
 
-The single-threaded pipelining technique described above also showed serious promise. 
-For very short client requests (0.1ms each), the service managed to even more than the expected 2x performance gain, probably due to the backend service batching requests creating what acted in practice like an additional pipeline stage. 
-For requests that took longer to process (1-10ms each) however, the system successfully achieved an approximately 2x throughput increase.
-
+The single-threaded pipelining technique described above also showed great potential. 
+For very short client requests (0.1ms each), the service managed to achieve even more than the expected 2x performance gain, probably due to the backend service batching requests creating what acted in practice like an additional pipeline stage. 
+For requests that took longer to process (1-10ms each) however, the system successfully achieved an approximately 2x throughput increase due to the 2 stage nature of the pipeline: the first being the local computation and the second being the computation on the remote service.
 
 \chapter{Multi-Threaded Pipelining in Adam}\label{AdamDesign}
 
 \section{Design Overview}
 
-The core of this work was to adapt the previous work performed on the Adam project to support both multi-threading and pipelining simultaneously. 
-As discussed in chapter 3, initial work on Adam had yielded some promising results both in the multi-threaded non-pipelined case and the single-threaded pipelined case. 
-In order to better understand our approach to combining these techniques. 
-Let use first define a couple terms for clarity:
+The core of the work that we performed was to adapt the previous work on the Adam project to support both multi-threading and pipelining simultaneously.
+As discussed in Chapter \ref{Adam}, initial work on Adam had yielded some promising results both with the multi-threaded non-pipelined approach and the single-threaded pipelined approach. 
+In order to better understand our approach to combining these techniques, let use first define a few terms for clarity:
 \begin{itemize}
-\item A \textbf{batch} of requests is a set of mostly non-conflicting client request to execute.
-\item A \textbf{group} of threads are threads that will run at the same time in the pipeline.
+\item A \textbf{batch} of requests is a set of mostly non-conflicting client (the output of a mixer as defined in \ref{EveMixer}) request to execute.
+\item A \textbf{group} of threads are execution threads that will run at the same time in the pipeline.
 \end{itemize}
+
+\begin{figure}[h]
+\centering
+\includegraphics[width=0.85\textwidth]{PipelinedParallel.png}
+\caption{\label{parpipe}An example execution of $12$ client requests in the multi-threaded pipelining approach we implemented. Two groups of two execution threads each can process $12$ client requests in just $7$ time slices.}
+\end{figure}
+
+Figure \ref{parpipe} shows what an execution of $12$ client requests would look like in our multi-threaded and pipelined system with two groups of two execution threads each. 
+Notice that only one group is performing local computation at a time (the dark rectangles) but multiple threads within a group are running simultaneously.
+Also notice that the full execution of all $12$ client requests requires only seven of the same time slices used in the other diagrams.
+This abstraction does not however effect the total number of checkpoints that must be performed (seven) from the original multi-threaded approach.
 
 At a very high level, our approach was to adapt the existing single-threaded pipelining code to have it schedule groups of threads to run in the pipeline instead of a single thread. 
 To manage each group of threads, we adapted the existing multi-threaded non-pipelined Adam code to allow it to behave within this pipelined environment. 
-The following chapter will explain at length the steps we took to convert the existing code we started with, as well as the new code we had to write to make this idea a reality
+The following chapter will explain at length the steps we took to convert the existing code we started with, as well as the new code we had to write to make this idea a reality.
 
 \section{Theoretical Benefits}
 
 By combining both pipelining and multi-threading, we expected our speedups over a naive replicated state machine in this system model to both scale linearly with the number of threads we were using as well as double because of the two stage pipeline. 
-In total this meant that with the 16 core machines we had to test with, we hoped to see a 32x throughput improvement in our microbenchmarks.
+In total this meant that with the 16 core machines we had available to test with, we hoped to see approximately a 32x throughput improvement in our microbenchmarks. 
+
+The figure \ref{parpipe} shows the improvement that we would general expect by using just two execution cores (because only two threads are ever running locally at a time.
+We would expect a 2x throughput increase from using two threads concurrently as well as approximately a 2x throughput increase from the two stage pipeline for about a 4x improvement overall.
+
+Visually, you can see this exemplified in the number of slices in each diagram. 
+The naive sequential implementation (Figure \ref{NaiveSequential}) required $24$ time slices while the execution in our system required only $7$.
+
+\begin{align*}
+24 / 7 \approx 3.43
+\end{align*}
+
+This number actually converges to $4$ as the number of requests run in each batch increases to infinity.
+A formal proof of this fact is available in Jim Given's thesis but conceptually you can see that the larger the number of requests that each thread must execute, the less that the ``unmatched'' slices at the beginning and the end of the batch matter. 
+If the diagrams instead showed batches of $24$ requests each, the naive implementation would require $48$ time slices ($24$ requests $\cdot \ 2$ slices / request $=\ 48$).
+Our pipelined implementation would require only $13$ slices: $24$ requests / $4$ threads $ = 6$ requests / thread $\cdot 2$ slices / request $ = 12$ slices $ + 1$ extra slice of time for the first two threads at the end of the batch. 
+
+\begin{align*}
+48 / 13 \approx 3.69
+\end{align*}
 
 \chapter{Adam Implementation}\label{AdamImplementation}
 
 \section{Initial Code Structure}
 
-When we began our contributions to the Adam project, implementations existed for both approaches described in the previous chapter. 
-Before explaining the work that we did to create a pipelined SMR system that used speculative execution, we will examine in detail that existing building blocks that we had to work with.
+When we began our contributions to the Adam project, implementations existed for both approaches described in Chapter \ref{Adam}. 
+Before explaining the work that we did to create a pipelined SMR system that used speculative execution, we will examine in detail that existing building blocks that we used to construct our final implementation.
 
 \subsection{Existing Multi-Threaded Adam Implementation}
 
