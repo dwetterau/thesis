@@ -300,7 +300,7 @@ Our pipelined implementation would require only $13$ slices: $24$ requests / $4$
 When we began our contributions to the Adam project, implementations existed for both approaches described in Chapter \ref{Adam}. 
 Before explaining the work that we did to create a pipelined SMR system that used speculative execution, we will examine in detail that existing building blocks that we used to construct our final implementation.
 
-\subsection{Existing Multi-Threaded Adam Implementation}
+\subsection{Existing Multi-Threaded Adam Implementation}\label{BM}
 
 The existing multi-threaded Adam implementation we started with was a modification to the existing Eve code that allowed the code to perform nested requests. 
 Some of the core changes involved the use of Apache's Commons Javaflow library to easily allow execution threads to rollback their state to a checkpoint, even if they are currently in the middle of executing. 
@@ -310,7 +310,7 @@ Execution threads were controlled in this implementation by the Batch Manager (B
 This BM was also intended to handle ensuring that the all replicas were at the same state at each wall, which involved sending off a hash of the replica's state and initiating a rollback if needed. 
 When we received the code however, this work was largely not finished as the existing multi-threaded attempt was intended to simply demonstrate that speculative execution could still provide performance gains in this environment.
 
-\subsection{Sequential Pipeline Manager}
+\subsection{Sequential Pipeline Manager}\label{SPM}
 
 The Sequential Pipeline Manager (SPM) was first implemented by Manos Kapritsos to demonstrate that the single-threaded pipelining approach had promise in this system model. 
 The SPM in particular was the part of the system that controlled what execution thread was currently running and handled scheduling the next thread when the running thread desired to yield.
@@ -332,13 +332,13 @@ Once all threads had responded in this way, the SPM finished the batch and relea
 % Maybe rename this to core components or something?
 \section{Core Components}
 
-When implementing Adam with the multi-threaded pipelined approach, we decided to first combine the two existing approaches into one system (described in \ref{existing}) before implementing the parts of the functionality that were not yet present. 
+When implementing Adam with the multi-threaded pipelined approach, we decided to first combine the two existing approaches into one system before implementing the parts of the functionality that were not yet present. 
 We began by adapting the Sequential Pipeline Manager to schedule groups of threads instead of just one at a time, and then modified the Batch Manager to control a group of threads and behave within the pipeline.
 After these modifications, we finished implementing parts of Adam that had not been implemented for the initial proof of concepts such as the verification stage and made appropriate modifications to other existing parts of the code base to support both multi-threading and pipelining simultaneously.
 
 \subsection{The Parallel Pipeline Manager}
 
-By taking the structure of the existing SPM written by Kapritsos, we built what we call the Parallel Pipeline Manager (PPM) to schedule groups of threads in the context of the pipeline. 
+By taking the structure of the existing SPM written by Kapritsos (and described in \ref{SPM}), we built what we call the Parallel Pipeline Manager (PPM) to schedule groups of threads in the context of the pipeline. 
 The changes that we made to the SPM to control groups of threads mostly centered around initialization and the detection of the correct time to swap groups on or off the execution pipeline.
 
 Within the SPM, a simple mechanism was used to schedule client requests to execution threads that ran one at a time in a pipelined fashion. 
@@ -367,50 +367,53 @@ A simple workaround for this is to only allow the PPM to mark the threads as not
 
 \subsection{The Parallel Group Manager and Execution Threads}
 
-The second part of our system that allowed groups of threads to run in a speculative manner was the Parallel Group Manager (PGM). This was the part of the system that controlled the execution threads within a single group.
-It was at this layer of abstraction in our system that we handled taking checkpoints, possibly rolling back, and informing the PPM when all of the threads in the group were finished executing their assigned requests within the batch. 
-The Batch Manager served as our starting point for this part of the implementation, as it was already designed to control multiple execution threads in the Adam environment. 
-Some of the major modifications we had to make to the existing BM code involved making sure that the PGM was able to be scheduled on and off the pipeline controlled by the PPM, and that verification requests were made at all of the required times and that the responses were handled properly. 
-More details about our verification modifications and how we handled rollback are described in the next subsection. 
+The second part of our system that allows groups of threads to run in a speculative manner is the Parallel Group Manager (PGM). This part of the system that controls the execution threads within a single group.
+It is at this layer of abstraction in our system that we handle taking checkpoints, possibly rolling back, and informing the PPM when all of the threads in the group are finished executing their assigned requests within the batch.
+The Batch Manager (described in \ref{BM}) served as our starting point for this part of the implementation, as it was already designed to control multiple execution threads in the Adam environment.
+Some of the major modifications we had to make to the existing BM code involved making sure that the PGM was able to be scheduled on and off the pipeline controlled by the PPM, and that verification was performed in a way to guarantee safety and liveness. 
+This involved making sure that verification requests were made at all of the required times and that the responses to these messages were handled properly. 
+More details about our verification modifications and how we handled rollback are described in \ref{Verification}. 
 
-In order to make sure the PGM did not continue after being swapped off the pipeline, we simply had it communicate with the PPM to determine what the currently active group was. 
-If the active group corresponded to the group controlled by the PGM, the PGM continued instructing the execution threads to process more requests and checkpoint if needed. 
+In order to make sure the PGM did not continue executing after being swapped off the pipeline, we simply had it communicate with the PPM to determine what the currently active group was. 
+If the active group corresponded to the group controlled by the PGM and its corresponding control thread, the PGM continued instructing the execution threads to process more requests and checkpoint when needed. 
 If instead the PGM found that the current group was no longer its own, it simply waited until the PPM notified it to continue.
 
-We also had to make many changes to the execution threads to ensure that they behaved in this new parallel pipeline environment. 
-In particular, we had to ensure that the execution threads made the appropriate calls into the PPM to notify it when they were ready to yield and that the threads ensured that it was their owning group's turn to execute in the pipeline before proceeding with their executions.
+We also had to make many changes to the execution threads to ensure that they behaved in this new parallel pipelined environment.
+In particular, we had to ensure that the execution threads made the appropriate calls into the PPM to notify the PPM when they were ready to yield and that the threads ensured that it was their corresponding group's turn to execute in the pipeline before proceeding with their executions.
 
-\subsection{Verification Stage and Rollback}
+\subsection{Verification Stage and Rollback}\label{Verification}
 
-When we inherited the original Adam approach implementation, the verification stage had yet to be converted from its original behavior within Eve. 
-In Eve, the system was required to send out a verification message at the end of the computation of a batch to ensure that all replicas converged. 
-In Adam however, a verification request is needed before any execution thread makes a nested request as well as at the end of the batch.
+When we inherited the existing proof of concept Adam implementation, the verification stage had yet to be converted from its original behavior within Eve.
+In Eve, the system was only required to send out a verification message at the end of the computation of a batch to ensure that all replicas converged.
+In Adam however, the verification process must be performed before any execution thread makes a nested request as well as at the end of the batch because both of these situations expose internal state to potential clients.
 
-In order to make this modification, we first had to add a second message processing thread to the system that could concurrently process the responses from a verification stage while also processing client requests. 
-This was mostly an implementation detail but we do suspect that each control thread we add to the system reduces the scalability of the system as we approach maximum utilization of our machines. 
-When the verification response was received from the verifiers by the execution replicas, they would process the response and determine whether they needed to rollback, receive a state transfer, or could safely continue executing. 
+In order to make this modification, we first had to add a second message processing thread to the system that could concurrently process the responses from a verification stage while also processing incoming client requests. 
+This was mostly an implementation detail but we do suspect that each control thread we added to the system reduces the scalability of the system as we approach maximum utilization of our machines.
+When the verification response is received from the verifiers by the execution replicas, they process the response and determine whether they need to rollback, receive a state transfer, or could safely continue executing in the same way. 
+This part of the verification stage works almost identically to the way Eve's worked which is described in \ref{EveVerification}.
 Details about how our system handled rollback responses to verification requests can be found in the next section.
 
 \section{Rollback and Correctness Guarantees}
 
 In this parallel pipeline system we must be prepared to rollback the state of the replica to one that all replicas agree on in the event that the speculative execution causes a divergence. 
 Note that because we always ensure that all replicas are in the same state immediately before making any nested request, this means that the state that we must rollback to is right before some execution threads make a nested request or right at the beginning of the batch. 
-If it is the later, rollback is trivial, we simply must throw away all work performed so far and execute in a sequential deterministic manner to guarantee that progress is made and that all replicas converge.
+If it is the later, rollback is trivial, we simply must throw away all work performed so far and execute in a sequential deterministic manner to guarantee that progress is made and that all replicas converge. 
+This deterministic execution can even be performed in a sequential pipelined manner to achieve better performance than a naive sequential approach.
 
 If instead we rollback to right before the threads in a group make a nested request, our system must restore the state of all execution threads to the state they had before making these requests and switch into a sequential deterministic mode to ensure progress and convergence. 
-We use Apache's Commons Javaflow library, specifically the Continuations objects in this library, to keep track of the stack of each execution thread so that we can restore this stack and guarantee that all execution threads are in the exact state they were in right before they made their nested request. 
-These Continuation objects with the stack of each thread are stored in the Merkle tree data structure that Eve used which allows the replicas to make sure that they also have the same recorded stacks for each execution thread whenever a verification is performed. 
+We use Apache's Commons Javaflow library, specifically the Continuations objects in this library, to keep track of the stack of each execution thread.
+This allows us to restore this stack and guarantee that all execution threads are in the exact state they were in right before they made their nested request on each replica. 
+These Continuation objects with the stack of each thread are stored in the same Merkle tree data structure that Eve used which allows the replicas to make sure that they also have the same recorded stacks for each execution thread whenever a verification is performed. 
 This also allows replicas to receive continuations in a state transfer and immediately start the execution threads at the same point in the execution. 
 
-
-After performing a rollback in the non-trivial case, the threads in the now current group will either re-execute their request (if a response was never received) or will read the result from a cache if a response was received. 
+After performing a rollback in the non-trivial case, the threads in the now current group will either re-execute their nested request (if a response was never received) or will read the result from a cache if a response was received.
 Since we know that all execution threads were in the same state before making this request, we know that the request that each thread makes must be exactly the same, thereby eliminating the issue that Eve has in this environment with making requests that can never be repeated after rolling back.
 
 \section{Future Work}
 
-One proposed improvement to the above design that we did not implement was an optimization in the verification process. 
-The idea is to combine the nested requests with the verification requests, eliminating the need for the verifiers and this extra round trip. 
-This approach does however require that the backend service is aware that the service making nested requests is running our Adam system while our current implementation does not. 
+One proposed improvement to the above design that we did not implement was an optimization in the verification process.
+The idea is to combine the nested requests with the verification requests, eliminating the need for the verifiers and this extra round trip.
+This approach does however require that the remote service is aware that the service making nested requests is running our Adam system while our current implementation does not. 
 In practice, we found that this round trip was not the bottleneck of the system, but this improvement could still easily be made.
 
 As shown in the evaluation section, we did find that our system had much better performance gains on longer client requests than shorter ones due to the overhead that the additional checkpoints incurs in the form of additional Merkle tree computations. 
@@ -419,7 +422,7 @@ We believe that the system could be modified to minimize the total number of che
 \chapter{Evaluation and Results}\label{AdamResults}
 
 When we finished implementing Adam as described above, we were dismayed to find that our throughput increase numbers were much lower than we had hoped. 
-In fact for a variety of reasons, we first saw that using 8 threads in Adam only resulted in less than a 4x throughput increase over the simple sequential implementation. 
+In fact for a variety of reasons, we first saw that using 8 threads in Adam only resulted in less than a 4x throughput increase over the simple sequential implementation for very large requests. 
 We then took a methodical journey through several heinous bugs and the intricacies of this design until we arrived at much more satisfying performance results. 
 For details on the approach we took to correcting our implementation, and more about the problem that we are trying to solve in general, please read Jim Given's thesis.
 
