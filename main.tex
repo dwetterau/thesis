@@ -467,9 +467,20 @@ We also compared our Adam implementation head to head with the previous two appr
 
 \chapter{Related Work}\label{RelatedWork}
 
+% Work related to Eve
+
+% The UW project, Tapir (https://syslab.cs.washington.edu/research/tapir/index.html) Ellis told me about
+
+% Look at Manos' related work section for his Adam writing
+
 \chapter{Conclusion}\label{Conclusion}
 
+Traditional approaches to state machine replication have used deterministic single-threaded execution to guarantee that replicas agree on the same final state. Although these approaches are straightforward, they fail to take advantage of the multicore nature of today's machines. In addition, these approaches are ill-suited to an environment with communicating services. This is because communication with other services requires a sequential execution thread to block while waiting for a response. 
+Newer techniques such as the Eve protocol \ref{EvePaper} have leveraged speculative execution to allow for the replicated state machine abstraction to be multi-threaded.
+Even systems like Eve however do not immediately perform well in an environment with communicating services and known pipelining techniques can be effectively used to improve performance.
 We have presented a novel approach to providing the replicated state machine abstraction in an environment with communicating services that leverages both the multicore nature of today's machines and pipelining techniques to improve resource utilization. 
+
+% Have a paragraph with final results or something here
 We found through the use of microbenchmarks that our design and implementation allows a workload of heavy requests to scale up to 21.8x the throughput of a naive sequential implementation in a non-replicated setting with 16 core machines, or up to 13.0x the throughput in a replicated setting with 8 cores per execution server.
 
 \end{document}
