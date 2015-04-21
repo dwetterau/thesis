@@ -1,4 +1,5 @@
 \documentclass[11pt, oneside]{report}
+\usepackage{setspace}
 \usepackage[utf8]{inputenc}
 \usepackage{amsmath}
 \usepackage{float}
@@ -459,11 +460,13 @@ This could be through better detection of new objects in the replica that must b
 
 \begin{figure}[h]
 \centering
-\includegraphics[width=0.85\textwidth]{RequestAnatomy.png}
+\includegraphics[width=0.85\textwidth]{graphs/latencythroughput/graph.png}
 \caption{\label{head2head}Latency-Throughput graphs of Adam for large requests with all four approaches.}
 \end{figure}
 
-We also compared our Adam implementation head to head with the previous two approaches described in Chapter \ref{Adam} as well as a naive sequential implementation. Figure \ref{head2head} shows latency throughput graphs for our implementation running with three groups of eight threads each in a fully replicated environment. We compare our implementation in this graph to the multithreaded but non-pipelined approach running with 8 threads, and with the sequential-pipelined approach running with three threads (which is equivalent to our implementation using three groups).
+We also compared our Adam implementation head to head with the previous two approaches described in Chapter \ref{Adam} as well as a naive sequential implementation. Figure \ref{head2head} shows latency throughput graphs for our implementation running with three groups of eight threads each in a fully replicated environment. We compare our implementation in this graph to the multithreaded but non-pipelined approach running with 8 threads, and with the sequential-pipelined approach running with three threads (which is equivalent to our implementation using three groups) as well as the naive sequential implementation. 
+
+It can be seen from the graph that the naive sequential implementation achieves nearly $50$ requests per second which is the theoretical maximum throughput for $20$ms requests ($10$ms for the local and remote computation). The sequential pipelined approach approaches twice the performance of the naive implementation, once due to the fact that the pipeline is of depth two (the local service and the remote service). Our implementation achieves a maximum throughput of $582$ requests per second with this setup while the original multi-threaded approach achieves slightly over $300$ at its saturation point. This shows that our pipelining improvements achieve close to the $2x$ speedup that we expected.
 
 \chapter{Related Work}\label{RelatedWork}
 
@@ -471,7 +474,8 @@ We also compared our Adam implementation head to head with the previous two appr
 
 % The UW project, Tapir (https://syslab.cs.washington.edu/research/tapir/index.html) Ellis told me about
 
-% Look at Manos' related work section for his Adam writing
+% Look at Manos' related work section for his Adam writing: Replicated RPC
+% - Still relies on sequential execution, does not handle speculative execution
 
 \chapter{Conclusion}\label{Conclusion}
 
