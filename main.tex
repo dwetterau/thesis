@@ -18,26 +18,26 @@
 
 \chapter{Introduction}\label{Introduction}
 Computing systems today are rarely self-contained units. 
-The desire for more levels of abstraction and cleaner separation of responsibilities has led to systems being modularized into services that must communicate and work together to accomplish tasks. 
+The desire for more levels of abstraction and cleaner separations of responsibilities has led to systems being modularized into services that must communicate and work together to accomplish tasks. 
 Not only is this separation observed within single systems, but also in systems that interact with external services such as cloud based storage or computing providers. 
-In this paper we will present a way to build these systems in a highly available way by leveraging existing techniques such as the replicated state machine abstraction.
+In this paper we will present a way to build these systems in a highly available and fault tolerant way by building upon existing techniques such as the replicated state machine abstraction.
 
-Unfortunately, the replicated state machine abstraction as it exists today is not immediately fit for this multiple service environment. 
-Previous work on the RSM abstraction has focused on the client-server model, where the RSM behaves as a single-correct-server from the perspective of the client and nothing else. 
+Unfortunately, the replicated state machine abstraction as it exists today is not immediately fit for this communicating service environment. 
+Previous work on the RSM abstraction has focused on the client-server model, where the RSM behaves as a single-correct-server from the perspective of the clients making requests. 
 This behavior does not allow these systems to communicate with other services because doing so could expose the intermediate state of the system which is not guaranteed to be consistent in this abstraction.
 
 Aside from consistency issues, a traditional RSM abstraction would also suffer from fundamental performance deficiencies in this environment. 
-Most replication protocols rely on the sequential execution of commands to guarantee that replicas operate in a deterministic manner. 
+Many replication protocols rely on the sequential execution of commands to guarantee that replicas operate in a deterministic manner \cite{practicalBFT, upRight, hq, paxos}. 
 Not only does sequential execution do a poor job of leveraging abundantly available multicore machines, it also requires that a system in this environment remain idle while waiting for the response from a command issued to another service.
 
 In this paper, we will present a technique to adapt the replicated state machine abstraction to the environment described above. 
-We will first leverage recent work on multi-threaded speculative execution to allow our system to better utilize the multicore nature of machines today. 
+We will first leverage speculative execution \cite{eve, zyz} to allow our system to be multi-threaded and therefore better utilize the multicore nature of machines today. 
 In addition, we will show how to pipeline a system using speculative execution to mitigate the blocking of the system while waiting for the response of communications it may perform. 
 This work builds on operations originally made by the Laboratory for Advanced Systems Research at UT and was a joint effort between myself and Jim Given. 
 I highly recommend reading Jim’s thesis on this same work to get the complete understanding of this project.
 
 The rest of this paper is structured as follows. 
-Chapter \ref{Background} will provide a comprehensive background on the replicated state machine abstraction and the Eve system, which pioneered the use of speculative execution within a RSM. 
+Chapter \ref{Background} will provide a comprehensive background on the replicated state machine abstraction and the Eve system, which pioneered the use of multi-threaded speculative execution within a RSM. 
 Chapter \ref{Adam} will introduce Adam, a system to provide high availability in an environment with services that communicate not only with clients, but also with other services. 
 Chapter \ref{AdamDesign} will describe at a high level the design and benefits of pipelining in Adam. 
 Chapter \ref{AdamImplementation} will explore our implementation of Adam in detail along with the correctness guarantees Adam provides. 
@@ -63,7 +63,7 @@ For a weaker failure model, one only needs to either increase the number of repl
 In order to provide correctness, the requirement of SMR is that the observable state (including but not limited to the outputs) of each state machine must always be the same across all replicas. 
 This is simply because if all replicas have the same observable state, any replica on its own could communicate with clients if another crashed.
 
-To provide this correctness requirement, SMR has traditionally been implemented by only allowing sequential execution of commands. 
+To provide this correctness requirement, SMR has traditionally been implemented by only allowing sequential execution of commands \cite{schneider}. 
 The reason behind this is that if commands are first ordered the same way on each replica, and are then executed one at a time in this deterministic way, then all replicas will arrive at the same state. 
 This is easy to see because each state machine simply follows the exact same state transitions in the same order. 
 This design is referred to as the agree-execute approach, and has been applied in a wide range of systems including the original Paxos protocol.
@@ -71,7 +71,7 @@ This design is referred to as the agree-execute approach, and has been applied i
 Sequential execution was an acceptable option when SMR was first introduced since single core performance was rapidly increasing. 
 Now that the world has instead shifted to increasing the amount of parallelism to improve performance, we find that sequential execution is a serious limitation. 
 If we tried to naively relax this sequential execution restriction and run commands using multiple threads, there would be no guarantee that the replicas would arrive in the same final state since the commands could be interleaved across the threads. 
-In the next section, we will see one way that we can still provide the replicated state machine abstraction without the need for this sequential execution restriction. 
+In the next section, we will see one way that we can still provide the replicated state machine abstraction without sequential execution by using speculative execution instead. 
  
 
 \section{Eve: Execute-Verify Replication}
@@ -79,7 +79,7 @@ In the next section, we will see one way that we can still provide the replicate
 In the previous section, we explored how the majority of SMR implementations relied on the agree-execute architecture to ensure that replicas converged to the same ending state. 
 This approach guarantees convergence through determinism and sequential execution. 
 One observation that can be made about these approaches is that they have effectively reduced the actual safety requirement of SMR (that the observable state of each state machine is the same across all replicas) to the problem of guaranteeing that all replicas agree on an order of commands to execute. 
-Eve is a system that was developed at the University of Texas at Austin that uses the real safety requirement of SMR to enable multi-threaded execution.
+Eve is a system that was developed at the University of Texas at Austin that uses the real safety requirement of SMR to enable multi-threaded execution \cite{eve, manosThesis}.
 
 Eve uses what is referred to as speculative execution in a way that provides the safety guarantee of SMR while still providing liveness to form a correct replicated state machine abstraction. 
 In Eve, replicas are given a set, or batch, of requests to execute from the primary, however they are not required to agree on an order in which to execute them. 
@@ -145,13 +145,13 @@ In Remus, the primary replica executes requests with multiple threads and then t
 This approach, referred to as passive replication, both requires considerably more bandwidth (due to the transfer of full states) and does not protect against commission failures, while Eve does. 
 Eve was shown to outperform Remus by a factor of 4.7x while using orders of magnitude less network bandwidth in the authors' tests.
 
-\chapter{Adam: State Machine Replication with Interacting Services}\label{Adam}
+\chapter{Adam: State Machine Replication with Communicating Services}\label{Adam}
 
 In the last chapter we saw that the replicated state machine abstraction can be used with in a parallel environment with serious performance improvements in terms of request throughput. 
 Systems today are rarely well described by the simple client-server model.
 Instead, most services need to interact with other services while processing a request from a client. 
 
-For example, if a client visits the website Dropbox.com, the server handling the client's request needs to make what we will refer to as a ``nested request'' to a separate service. This nested request functions to retrieve the names of the client's files, before sending the contents of the webpage back to the client. Figure \ref{anatomy} shows the anatomy of a client request that we will be considering for the for the rest of this paper. In the figure, you can think of the local computation as the time that the webserver spends rendering the HTML to return and the remote computation as the remote service loading the user's files for this example.
+For example, if a client visits a cloud file storage website \cite{dropbox}, the server handling the client's request needs to make what we will refer to as a ``nested request'' to a separate service. This nested request functions to retrieve the names of the client's files, before sending the contents of the webpage back to the client. Figure \ref{anatomy} shows the anatomy of a client request that we will be considering for the for the rest of this paper. In the figure, you can think of the local computation as the time that the webserver spends rendering the HTML to return and the remote computation as the remote service loading the user's files for this example.
 
 \begin{figure}[h]
 \centering
@@ -162,9 +162,19 @@ For example, if a client visits the website Dropbox.com, the server handling the
 Eve's approach to multi-threaded SMR successfully leverages the multicore nature of today's machines, but it is not immediately clear how to extend such a system to allow for replicated services to communicate. 
 In this chapter, we will explore the previous work that was performed to convert the Eve system to work in this new environment: one where servers not only expose their states to clients, but also to other services through nested requests.
 
+\section{System Model}
+We will assume a system model similar to that of Eve. 
+Adam requires periods of synchrony in an asynchronous environment to guarantee liveness. 
+In these periods of synchrony we will assume that messages sent between two correct processes are delivered within a bounded time. 
+Outside of these periods, Adam tolerates arbitrary network delays and lost messages without violating safety.
+
+The Adam prototypes described in this paper can be independently configured with their own fault tolerance parameters. 
+Just as in the UpRight system \cite{upRight}, Adam is guaranteed to be able to respond to clients in the presence of at most $u$ failures (commission or omission) and is guaranteed that any response sent to a correct client in the presence of up to $r$ commission failures and any number of omission failures. 
+Like in Eve and previous work on Adam, we will assume that no failures in the system can break cryptographic primitives and thereby be able to forge a correct node's MAC \cite{eve, manosThesis}.
+
 \section{Initial Approaches}
 
-Before describing Adam, it is important to understand why speculative execution approaches such as Eve do not work in this environment with communicated services. 
+Before describing Adam, it is important to understand why speculative execution approaches such as Eve do not work in this environment with communicating services. 
 Consider a service $A$ that is using Eve and is processing client requests. 
 While processing some of the client requests service $A$ receives, it must make a call to service $B$. 
 Now suppose that due to the speculative nature of Eve, too many replicas diverge while processing this client request. In Eve, this causes all replicas to rollback to their state before they began processing the client requests and try again in a sequential manner. 
@@ -236,13 +246,13 @@ In figure \ref{seqpipe} you can see the execution of $12$ client requests in a s
 \section{Initial Results}
 
 The initial findings in terms of the performance gain that applying speculative execution had over a naive sequential implementation were quite promising. 
-In Kapritsos' doctoral defense, he reported that the throughput of this speculative executing Adam system steadily increased with the number of cores according to the benchmarks that he ran. 
+In Kapritsos' doctoral defense, he reported that the throughput of this speculative executing Adam system steadily increased with the number of cores according to the benchmarks that he ran \cite{manosThesis}. 
 Even though the throughput increased, it did not seem to be scaling particularly linearly with the number of cores. 
-Servers with 16 cores running 16 execution threads in this implementation of Adam only had about 4x the throughput of the same servers running with a single thread each.
+Servers with 16 cores running 16 execution threads in this implementation of Adam only had about 4 times the throughput of the same servers running with a single thread each.
 
 The single-threaded pipelining technique described above also showed great potential. 
-For very short client requests (0.1ms each), the service managed to achieve even more than the expected 2x performance gain, probably due to the remote service batching requests creating what acted in practice like an additional pipeline stage. 
-For requests that took longer to process (1-10ms each) however, the system successfully achieved an approximately 2x throughput increase due to the 2 stage nature of the pipeline: the first being the local computation and the second being the computation on the remote service.
+For very short client requests (0.1ms each), the service managed to achieve even more than the expected double throughput gain, probably due to the remote service batching requests creating what acted in practice like an additional pipeline stage. 
+For requests that took longer to process (1-10ms each) however, the system successfully achieved an approximately double throughput increase due to the two stage nature of the pipeline: the first being the local computation and the second being the computation on the remote service.
 
 \chapter{Multi-Threaded Pipelining in Adam}\label{AdamDesign}
 
@@ -265,21 +275,21 @@ In order to better understand our approach to combining these techniques, let us
 Figure \ref{parpipe} shows what an execution of $12$ client requests would look like in our multi-threaded and pipelined system with two groups of two execution threads each. 
 Notice that only one group is performing local computation at a time (the dark rectangles) but multiple threads within a group are running simultaneously.
 Also notice that the full execution of all $12$ client requests requires only seven of the same time slices used in the other diagrams.
-This abstraction does not however effect the total number of checkpoints that must be performed (seven) from the original multi-threaded approach.
+This abstraction does not however affect the total number of checkpoints that must be performed (seven) from the original multi-threaded approach.
 
 At a very high level, our approach was to adapt the existing single-threaded pipelining code to have it schedule groups of threads to run in the pipeline instead of a single thread. 
 To manage each group of threads, we adapted the existing multi-threaded non-pipelined Adam code to allow it to behave within this pipelined environment. 
-The following chapter will explain at length the steps we took to convert the existing code we started with, as well as the new code we had to write to make this idea a reality.
+This chapter will explain at length the steps we took to convert the existing code we started with, as well as the new code we had to write to make this idea a reality.
 
 \section{Theoretical Benefits}
 
 By combining both pipelining and multi-threading, we expected our speedups over a naive replicated state machine in this system model to both scale linearly with the number of threads we were using as well as double because of the two stage pipeline. 
-In total this meant that with the 16 core machines we had available to test with, we hoped to see approximately a 32x throughput improvement in our microbenchmarks. 
+In total this meant that with the 16 core machines we had available to test with, we hoped to see approximately 32 times the throughput of a naive sequential implementation in our microbenchmarks. 
 
-The figure \ref{parpipe} shows the improvement that we would general expect by using just two execution cores (because only two threads are ever running locally at a time.
-We would expect a 2x throughput increase from using two threads concurrently as well as approximately a 2x throughput increase from the two stage pipeline for about a 4x improvement overall.
+The figure \ref{parpipe} is an example the improvement that we would general expect by using just two execution cores (because only two threads are ever running locally at a time) one a batch of $12$ request.
+We would expect a doubled throughput increase from using two threads concurrently as well as approximately a doubled throughput increase from the two stage pipeline for about a quadrupled throughput amount overall.
 
-Visually, you can see this exemplified in the number of slices in each diagram. 
+Visually, you can see this exemplified by the number of time slices in each diagram of this paper.
 The naive sequential implementation (Figure \ref{NaiveSequential}) required $24$ time slices while the execution in our system required only $7$.
 
 \begin{align*}
@@ -287,7 +297,7 @@ The naive sequential implementation (Figure \ref{NaiveSequential}) required $24$
 \end{align*}
 
 This number actually converges to $4$ as the number of requests run in each batch increases to infinity.
-A formal proof of this fact is available in Jim Given's thesis but conceptually you can see that the larger the number of requests that each thread must execute, the less that the ``unmatched'' slices at the beginning and the end of the batch matter. 
+A formal proof of this fact is available in Jim Given's thesis but conceptually you can see that the larger the number of requests that each thread must execute, the less that the ``unmatched'' slices at the beginning and the end of the batch contribute. 
 If the diagrams instead showed batches of $24$ requests each, the naive implementation would require $48$ time slices ($24$ requests $\cdot \ 2$ slices / request $=\ 48$).
 Our pipelined implementation would require only $13$ slices: $24$ requests / $4$ threads $ = 6$ requests / thread $\cdot \ 2$ slices / request $ = 12$ slices $ + 1$ extra slice of time for the first two threads at the end of the batch. 
 
@@ -304,8 +314,8 @@ Before explaining the work that we did to create a pipelined SMR system that use
 
 \subsection{Existing Multi-Threaded Adam Implementation}\label{BM}
 
-The existing multi-threaded Adam implementation we started with was a modification to the existing Eve code that allowed the code to perform nested requests. 
-Some of the core changes involved the use of Apache's Commons Javaflow library to easily allow execution threads to rollback their state to a checkpoint, even if they are currently in the middle of executing. 
+The existing multi-threaded Adam implementation we started with was a modification to the existing Eve \cite{eve} code that allowed the code to perform nested requests. 
+Some of the core changes involved the use of Apache's Commons Javaflow library \cite{javaflow} to easily allow execution threads to rollback their state to a checkpoint, even if they are currently in the middle of executing. 
 The other modifications to Eve involved adding support for multiple checkpoints taken per batch, one after every time the execution threads ``hit a wall'', meaning that all currently active execution threads were either finished with the entire batch of requests or were ready to make a nested request.
 
 Execution threads were controlled in this implementation by the Batch Manager (BM) which handled the logic of making sure all threads had ``hit a wall'' and initiated the checkpoint operation for each execution thread. 
@@ -314,7 +324,7 @@ When we received the code however, this work was largely not finished as the exi
 
 \subsection{Sequential Pipeline Manager}\label{SPM}
 
-The Sequential Pipeline Manager (SPM) was first implemented by Manos Kapritsos to demonstrate that the single-threaded pipelining approach had promise in this system model. 
+The Sequential Pipeline Manager (SPM) was first implemented by Manos to demonstrate that the single-threaded pipelining approach had promise in this system model. 
 The SPM in particular was the part of the system that controlled what execution thread was currently running and handled scheduling the next thread when the running thread desired to yield.
 This meant that the SPM was also responsible for enforcing the condition that only one execution was running at any point in time and that all execution was deterministic.
 This code was very straightforward but it served as the inspiration for the pipeline manager that we built later to schedule groups of threads.
@@ -403,13 +413,13 @@ If it is the later, rollback is trivial, we simply must throw away all work perf
 This deterministic execution can even be performed in a sequential pipelined manner to achieve better performance than a naive sequential approach.
 
 If instead we rollback to right before the threads in a group make a nested request, our system must restore the state of all execution threads to the state they had before making these requests and switch into a sequential deterministic mode to ensure progress and convergence. 
-We use Apache's Commons Javaflow library, specifically the Continuations objects in this library, to keep track of the stack of each execution thread.
+We use Apache's Commons Javaflow library \cite{javaflow}, specifically the Continuations objects in this library, to keep track of the stack of each execution thread.
 This allows us to restore this stack and guarantee that all execution threads are in the exact state they were in right before they made their nested request on each replica. 
 These Continuation objects with the stack of each thread are stored in the same Merkle tree data structure that Eve used which allows the replicas to make sure that they also have the same recorded stacks for each execution thread whenever a verification is performed. 
 This also allows replicas to receive continuations in a state transfer and immediately start the execution threads at the same point in the execution. 
 
 After performing a rollback in the non-trivial case, the threads in the now current group will either re-execute their nested request (if a response was never received) or will read the result from a cache if a response was received.
-Since we know that all execution threads were in the same state before making this request, we know that the request that each thread makes must be exactly the same, thereby eliminating the issue that Eve has in this environment with making requests that can never be repeated after rolling back.
+Since we know that all execution threads were in the same state before making this request, we know that the request that each thread makes must be exactly the same, thereby eliminating the issue that Eve has in this environment with making requests that might never be repeated after rolling back.
 
 \section{Future Work}
 
@@ -469,7 +479,7 @@ This could be achieved through better detection of new objects in the replica th
 
 We also compared our Adam implementation head to head with the previous two approaches described in Chapter \ref{Adam} as well as a naive sequential implementation. 
 Figure \ref{head2head} shows latency throughput graphs for our implementation running with three groups of eight threads each in a fully replicated environment. 
-We compare our implementation in this graph to the multithreaded but non-pipelined approach running with 8 threads, and with the sequential-pipelined approach running with three threads (which is equivalent to our implementation using three groups) as well as the naive sequential implementation. 
+We compare our implementation in this graph to the multi-threaded but non-pipelined approach running with 8 threads, and with the sequential-pipelined approach running with three threads (which is equivalent to our implementation using three groups) as well as the naive sequential implementation. 
 
 It can be seen from the graph that the naive sequential implementation achieves nearly $50$ requests per second which is the theoretical maximum throughput for $20$ms requests ($10$ms for the local and $10$ms remote computation). 
 The sequential pipelined approach approaches twice the performance of the naive implementation, once again due to the fact that the pipeline is of depth two (the local service and the remote service). 
@@ -492,13 +502,17 @@ This work built off of existing work from the University of Texas at Austin Labo
 
 \chapter{Conclusion}\label{Conclusion}
 
-Traditional approaches to state machine replication have used deterministic single-threaded execution to guarantee that replicas agree on the same final state. Although these approaches are straightforward, they fail to take advantage of the multicore nature of today's machines. In addition, these approaches are ill-suited to an environment with communicating services. This is because communication with other services requires a sequential execution thread to block while waiting for a response. 
-Newer techniques such as the Eve protocol \cite{EvePaper} have leveraged speculative execution to allow for the replicated state machine abstraction to be multi-threaded.
+Traditional approaches to state machine replication have used deterministic single-threaded execution to guarantee that replicas agree on the same final state. Although these approaches are straightforward, they fail to take advantage of the multicore nature of today's machines. 
+In addition, these approaches are ill-suited to an environment with communicating services. This is because communication with other services requires a sequential execution thread to block while waiting for a response. 
+
+Newer techniques such as the Eve protocol \cite{eve} have leveraged speculative execution to allow for the replicated state machine abstraction to be multi-threaded.
 Even systems like Eve however do not immediately perform well in an environment with communicating services and known pipelining techniques can be effectively used to improve performance.
 We have presented a novel approach to providing the replicated state machine abstraction in an environment with communicating services that leverages both the multicore nature of today's machines and pipelining techniques to improve resource utilization. 
 
-% Have a paragraph with final results or something here
-We found through the use of microbenchmarks that our design and implementation allows a workload of heavy requests to scale up to 21.8x the throughput of a naive sequential implementation in a non-replicated setting with 16 core machines, or up to 13.0x the throughput in a replicated setting with 8 cores per execution server.
+We found through the use of microbenchmarks that our design and implementation allows a workload of heavy requests to scale over $21$ times the throughput of a naive sequential implementation in a non-replicated setting with 16 core machines.
+In a fully replicated setting tolerating up to one replica failure, we achieved a over $12$ times the throughput in a with just 8 cores per execution server.
+Although results on smaller request sizes do not scale as well with the number of cores in the system, we believe that the issues with our system are implementation specific and are exacerbated by our lack of access to a cluster large enough to saturate our system with client requests.
+We have demonstrated that speculative execution based multithreading techniques can be used in this environment to scale the system with the number of cores of the execution replicas and that pipelining can be applied to these multi-threaded techniques to nearly double the performance.
 
 \bibliographystyle{unsrt}
 \bibliography{bib}

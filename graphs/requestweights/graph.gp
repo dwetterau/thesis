@@ -1,7 +1,7 @@
 set terminal pngcairo monochrome size 1024,512
 set output outputfile
 
-set title "Request Length Performance"
+set title "Throughput Increase by Request Size"
 set ylabel "Throughput Increase Factor (# times baseline)"
 set xlabel "Number of Threads"
 set xrange[0.5:16.5]
