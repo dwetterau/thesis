@@ -21,7 +21,7 @@
 \chapter{Introduction}\label{Introduction}
 Computing systems today are rarely self-contained units. 
 The desire for more levels of abstraction and cleaner separations of responsibilities has led to systems being modularized into services that must communicate and work together to accomplish tasks. 
-Not only is this separation observed within single systems, but also in systems that interact with external services such as cloud based storage or computing providers. 
+Not only is this separation observed within single systems, but also in systems that interact with external services such as cloud based storage or computing providers \cite{spanner, tao, dynamo}. 
 In this paper we will present a way to build these systems in a highly available and fault tolerant way by building upon existing techniques such as the replicated state machine abstraction.
 
 Unfortunately, the replicated state machine abstraction as it exists today is not immediately fit for this communicating service environment. 
@@ -152,16 +152,16 @@ Eve was shown to outperform Remus by a factor of 4.7x while using orders of magn
 
 \chapter{Adam: State Machine Replication with Communicating Services}\label{Adam}
 
-In the last chapter we saw that the replicated state machine abstraction can be used with in a parallel environment with serious performance improvements in terms of request throughput. 
+In the last chapter we saw that the replicated state machine abstraction can be used successfully in a parallel environment to achieve serious performance improvements in terms of request throughput. 
 Systems today are rarely well described by the simple client-server model.
-Instead, most services need to interact with other services while processing a request from a client. 
+Instead, most services need to interact with other services while processing a request from a client \cite{spanner, tao, dynamo}. 
 
-For example, if a client visits a cloud file storage website \cite{dropbox}, the server handling the client's request needs to make what we will refer to as a ``nested request'' to a separate service. This nested request functions to retrieve the names of the client's files, before sending the contents of the webpage back to the client. Figure \ref{anatomy} shows the anatomy of a client request that we will be considering for the for the rest of this paper. In the figure, you can think of the local computation as the time that the webserver spends rendering the HTML to return and the remote computation as the remote service loading the user's files for this example.
+For example, if a client visits a cloud file storage website \cite{dropbox}, the server handling the client's request needs to make what we will refer to as a ``nested request'' to a separate service. This nested request functions to retrieve the names of the client's files, before sending the contents of the webpage back to the client. Figure \ref{anatomy} shows the anatomy of a client request that we will be considering for the for the rest of this paper. In the diagram, you can think of the local computation as the time that the webserver spends rendering the HTML to return and the remote computation as the remote service loading the user's files for this example.
 
 \begin{figure}[h]
 \centering
 \includegraphics[width=0.5\textwidth]{RequestAnatomy.png}
-\caption{\label{anatomy}The anatomy of a client request that must perform a nested request. The dark line in the middle will be used to indicate a checkpoint operation. We will say that a request requires $2$ time slices to complete for simplicity: the first for the local computation and an equal amount of time for the remote computation.}
+\caption{\label{anatomy}The anatomy of a client request that must perform a nested request. The dark line will be used to indicate a checkpoint operation. We will say that a request requires $2$ time slices to complete for simplicity: the first for the local computation and an equal amount of time for the remote computation.}
 \end{figure}
 
 Eve's approach to multi-threaded SMR successfully leverages the multicore nature of today's machines, but it is not immediately clear how to extend such a system to allow for replicated services to communicate. 
@@ -174,31 +174,31 @@ In these periods of synchrony we will assume that messages sent between two corr
 Outside of these periods, Adam tolerates arbitrary network delays and lost messages without violating safety.
 
 The Adam prototypes described in this paper can be independently configured with their own fault tolerance parameters. 
-Just as in the UpRight system \cite{upRight}, Adam is guaranteed to be able to respond to clients in the presence of at most $u$ failures (commission or omission) and is guaranteed that any response sent to a correct client in the presence of up to $r$ commission failures and any number of omission failures. 
-Like in Eve and previous work on Adam, we will assume that no failures in the system can break cryptographic primitives and thereby be able to forge a correct node's MAC \cite{eve, manosThesis}.
+Just as in the UpRight system \cite{upRight}, Adam is guaranteed to be able to respond to clients in the presence of at most $u$ failures (commission or omission) and is guaranteed that any response sent to a correct client is correct in the presence of up to $r$ commission failures and any number of omission failures. 
+We will assume that no failures in the system can break cryptographic primitives which could for example allow failed nodes to forge a correct node's MAC. This assumption was also made in Eve \cite{eve, manosThesis}.
 
 \section{Initial Approaches}
 
-Before describing Adam, it is important to understand why speculative execution approaches such as Eve do not work in this environment with communicating services. 
+Before describing Adam, it is important to understand why speculative execution SMR approaches such as Eve do not work in this environment with communicating services. 
 Consider a service $A$ that is using Eve and is processing client requests. 
-While processing some of the client requests service $A$ receives, it must make a call to service $B$. 
+While processing some of the client requests service $A$ receives, it must make a call to a separate service $B$. 
 Now suppose that due to the speculative nature of Eve, too many replicas diverge while processing this client request. In Eve, this causes all replicas to rollback to their state before they began processing the client requests and try again in a sequential manner. 
 At this point, the request that service $A$ made to $B$ has already happened and cannot be rolled back. 
 If service $B$ had clients of its own, they could see the result of this nested request even after service $A$ tried again. 
 Worse still, when service $A$ re-executes the requests sequentially, there is no guarantee that it makes exactly the same nested request. 
-Non-determinism caused by thread interleaving could result in a nested request made as a result of the same client request that is different from the nested request that would be made when processing sequentially.
+Non-determinism caused by thread interleaving could result in a nested request made as a result of the same client request that is different from the nested request that is made when processing sequentially.
 
 This well known problem is known as the \textit{output commit} problem \cite{mootaz} and a very simple solution to the problem is to always take a snapshot before producing output or exposing internal state to any outside observer. 
 The first attempt to convert Eve to work in this communicating services setting took exactly this approach, and is described in \ref{EveModification}. 
 A separate idea to achieve higher performance in this setting was to simply run in a deterministic and sequential manner, but to leverage deterministic pipelining for increased performance. 
-With this idea, Adam would also not be speculative and no rollback would ever be needed to maintain correctness. This second approach is described in \ref{STP}.
+With this idea, Adam would not be speculative and no rollback would ever be needed to maintain correctness. This second approach is described in \ref{STP}.
 
 \subsection{Naive Sequential Implementation}
 
 The simplest way to imagine implementing SMR in this environment would be to use the typical agree-execute approach.
 This approach would work, however we will see in the next few sections that we can do much better. 
 Figure \ref{NaiveSequential} shows what such an implementation would look like if it were executing $12$ client requests. 
-Since agree-execute does not use speculative execution, no checkpoints are needed in this approach but you can clearly see that while remote computation is happening, no local computation can be performed.
+Since an agree-execute implementation does not use speculative execution, no checkpoints are needed in this approach but you can clearly see that while remote computation is happening, no local computation can be performed.
 As a result, the execution of $12$ client requests that require an equal amount of work on the local and remote services (a simplification we will use for ease of explanation) takes $24$ time slices.
 
 \begin{figure}[h]
@@ -210,12 +210,12 @@ As a result, the execution of $12$ client requests that require an equal amount 
 \subsection{Eve Modification}\label{EveModification}
 
 In an effort to leverage the performance gains that speculative execution approaches such as Eve promised, the first attempt to construct Adam focused on solving the output commit problem that Eve faced in this environment. 
-To do this, the initial Adam contributors at UT Austin simply modified the existing Eve implementation to take checkpoints before making nested requests. 
+To do this, the initial Adam contributors at the University of Texas at Austin simply modified the existing Eve implementation to take checkpoints before making nested requests. 
 
-Consider an Eve system with two execution threads processing client requests in a speculative manner. 
+For the purposes of illustration consider an Eve-like system with multiple execution threads that are processing client requests in a speculative manner. 
 When the execution threads arrive at the part of processing the client request that requires a nested request to another service, they inform the system of their progress and wait. 
-After the last thread reaches such a point in the request processing, the system computes a hash of its state in exactly the same way that Eve ensured all replicas were the same at the end of processing an entire batch. 
-If all replicas were in the same state after processing these prefixes of the client requests, the threads could safely make their nested requests and continue executing until the next such time, or until the end of their last request.
+After the last thread reaches such a point, the system computes a hash of its state and verifies that all replicas are consistent in exactly the same way that Eve does after processing an entire batch. 
+If all replicas are in the same state after processing these prefixes of the client requests, the threads could safely make their nested requests and continue executing until the next time that they make a nested request, or until the end of their last request.
 
 \begin{figure}[h]
 \centering
@@ -225,8 +225,8 @@ If all replicas were in the same state after processing these prefixes of the cl
 
 Figure \ref{parallel} Shows what an execution of $12$ client requests would look like with this implementation using $2$ execution threads. 
 Notice that checkpoints are taken right before the execution threads begin to make their nested requests to the remote service. 
-Also notice that an additional checkpoint is needed at the end to make sure all replicas converge at the end of the batch.
-This implementation would finish the batch of $12$ requests in just $12$ time slices compared to the $24$ that the naive approach requires.
+Also notice that an additional checkpoint is needed at the end to make sure all replicas have the same state at the end of the batch.
+This implementation (with two execution threads) finishes the batch of $12$ requests in just $12$ time slices compared to the $24$ that the naive approach requires.
 
 \subsection{Single-Threaded Pipelining}\label{STP}
 
@@ -235,7 +235,7 @@ The original contributors to Adam also implemented a system that leveraged singl
 
 The advantage of pipelining in this environment is that when a single thread is processing client requests and makes a request to a separate service, it must wait synchronously for the response. 
 If this communication with the remote service takes as long as the computation that the first service must perform, the system would be idle half the time.
-It is then clear that if it were possible to perform more work while waiting for the nested request's response, the performance of the system would increase.
+Therefore it is clear that if it were possible to perform more work while waiting for a nested request's response, the performance of the system would increase.
 
 \begin{figure}[h]
 \centering
@@ -243,15 +243,15 @@ It is then clear that if it were possible to perform more work while waiting for
 \caption{\label{seqpipe}An example execution of $12$ client requests with the single-threaded pipelining approach. For $12$ requests on $2$ execution threads, $13$ time slices are used and no checkpoints are performed because all execution is deterministic.}
 \end{figure}
 
-In order to build a system that performed this pipelining, the researchers used multiple threads but only ran them one at a time and scheduled them in a deterministic way. 
-Deterministic scheduling and only having a single execution thread running at any point in time guaranteed that all requests were executed deterministically, and therefore that all replicas in the system converge without the need for checkpointing or potentially rolling back.
+In order to build a system that performed this pipelining, the researchers used multiple threads for ease of implementation but only ran them one at a time and scheduled them in a deterministic way. 
+Deterministic scheduling and only having a single execution thread running at any point in time guarantees that all requests are executed deterministically, and therefore that all replicas in the system converge without the need for checkpointing or potentially rolling back.
 
-In figure \ref{seqpipe} you can see the execution of $12$ client requests in a single-threaded pipelined system. Notice that the grey rectangles indicate local computation, or that the replica machine is actually performing work locally. Only one thread is ever performing local computation at a time (guaranteeing determinism), but because of pipelining, the total number of time slices is cut almost in half over the naive approach.
+In figure \ref{seqpipe} you can see the execution of $12$ client requests in a single-threaded pipelined system. Notice that the grey rectangles indicate local computation, or that the replica machine is actually performing work locally. Only one thread is ever performing local computation at a time (guaranteeing determinism), but because of pipelining, the total number of time slices needed is cut almost in half over the naive approach.
 
 \section{Initial Results}
 
-The initial findings in terms of the performance gain that applying speculative execution had over a naive sequential implementation were quite promising. 
-In Kapritsos' doctoral defense, he reported that the throughput of this speculative executing Adam system steadily increased with the number of cores according to the benchmarks that he ran \cite{manosThesis}. 
+The initial findings in terms of the performance gain that applying speculative execution had over a naive sequential implementation in this environment were quite promising. 
+In Kapritsos' doctoral defense, he reported that the throughput of this speculatively executing Adam system steadily increased with the number of cores according to the microbenchmarks that he ran \cite{manosThesis}. 
 Even though the throughput increased, it did not seem to be scaling particularly linearly with the number of cores. 
 Servers with 16 cores running 16 execution threads in this implementation of Adam only had about 4 times the throughput of the same servers running with a single thread each.
 
