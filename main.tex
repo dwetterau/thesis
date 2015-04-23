@@ -21,18 +21,18 @@
 \chapter{Introduction}\label{Introduction}
 Computing systems today are rarely self-contained units. 
 The desire for more levels of abstraction and cleaner separations of responsibilities has led to systems being modularized into services that must communicate and work together to accomplish tasks. 
-Not only is this separation observed within single systems, but also in systems that interact with external services such as cloud based storage or computing providers \cite{spanner, tao, dynamo}. 
-In this paper we will present a way to build these systems in a highly available and fault tolerant way by building upon existing techniques such as the replicated state machine abstraction.
+Not only is this separation observed within single systems, but also in systems that interact with external services such as cloud based storage or computing providers \cite{tao, spanner, dynamo}. 
+In this paper we will present a way to build these systems in a highly available and fault tolerant way by building upon the existing techniques of State Machine Replication (SMR) and pipelining.
 
-Unfortunately, the replicated state machine abstraction as it exists today is not immediately fit for this communicating service environment. 
-Previous work on the RSM abstraction has focused on the client-server model, where the RSM behaves as a single-correct-server from the perspective of the clients making requests \cite{schneider}. 
+Unfortunately, SMR as it exists today is not immediately fit for this environment where services communicate. 
+Previous work on SMR has focused on the client-server model, where the replicated state machine behaves as a single-correct-server from the perspective of the clients making requests \cite{schneider}. 
 This behavior does not allow these systems to communicate with other services because doing so could expose the intermediate state of the system which is not guaranteed to be consistent in this abstraction.
 
-Aside from consistency issues, a traditional RSM abstraction would also suffer from fundamental performance deficiencies in this environment. 
+Aside from consistency issues, traditional SMR also suffers from fundamental performance deficiencies in today's computing environment. 
 Many replication protocols rely on the sequential execution of commands to guarantee that replicas operate in a deterministic manner \cite{practicalBFT, upRight, hq, paxos}. 
-Not only does sequential execution do a poor job of leveraging abundantly available multicore machines, it also requires that a system in this environment remain idle while waiting for the response from a command issued to another service.
+Not only does sequential execution do a poor job of leveraging abundantly available multicore machines, it also requires that a system in this environment remain idle while waiting for the response of a request issued to another service.
 
-In this paper, we will present a technique to adapt the replicated state machine abstraction to the environment described above. 
+In this paper, we will present a technique to adapt the SMR technique to the environment described above. 
 We will first leverage speculative execution \cite{eve, zyz} to allow our system to be multi-threaded and therefore better utilize the multicore nature of machines today. 
 In addition, we will show how to pipeline a speculative execution system to mitigate the blocking of the system while waiting for the response of communications it may perform. 
 This work builds on operations originally made by the Laboratory for Advanced Systems Research at the University of Texas at Austin and was a joint effort between David Wetterau and Jim Given. 
@@ -65,7 +65,7 @@ For a weaker failure model, one only needs to either increase the number of repl
 In order to provide correctness, the requirement of SMR is that the observable state (including but not limited to the outputs) of each state machine must always be the same across all replicas. 
 This is simply because if all replicas have the same observable state, any replica on its own could communicate with clients if another crashed.
 
-To provide this correctness requirement, SMR has traditionally been implemented by only allowing sequential execution of commands \cite{schneider, paxos, paxosMadeSimple}. 
+To provide this correctness requirement, SMR has traditionally been implemented by only allowing sequential execution of commands \cite{paxos, paxosMadeSimple, schneider}. 
 The reason behind this is that if commands are first ordered the same way on each replica, and are then executed one at a time in this deterministic way, then all replicas will arrive at the same state. 
 This is easy to see because each state machine simply follows the exact same state transitions in the same order. 
 This design is referred to as the agree-execute approach, and has been applied in a wide range of systems including the original Paxos protocol \cite{paxos}.
@@ -81,9 +81,9 @@ In the next section, we will see one way that we can still provide the replicate
 In the previous section, we explored why the majority of SMR implementations relied on the agree-execute architecture to ensure that replicas converged to the same ending state. 
 This approach guarantees convergence through determinism which sequential execution provides. 
 One observation that can be made about these approaches is that they have effectively reduced the actual safety requirement of SMR (that the observable state of each state machine is the same across all replicas) to the problem of guaranteeing that all replicas agree on an order of commands to execute. 
-Eve is a system that was developed at the University of Texas at Austin that uses the actual safety requirement of SMR to enable multi-threaded execution \cite{eve, manosThesis}.
+Eve is a system that was developed at the University of Texas at Austin that uses the actual safety requirement of SMR to enable multi-threaded execution \cite{manosThesis, eve}.
 
-Eve uses what is referred to as speculative execution \cite{zyz, eve} in a way that provides the safety guarantee of SMR while still providing liveness to form a correct replicated state machine abstraction. 
+Eve uses what is referred to as speculative execution \cite{eve, zyz} in a way that provides the safety guarantee of SMR while still providing liveness to form a correct replicated state machine abstraction. 
 In Eve, replicas are given a set, or batch, of client requests to execute from the primary, however they are not required to agree on an order in which to execute them. 
 In addition to the set of requests given to each replica, sources of non-determinism must be  eliminated such as seeds for the random number generator and other environment variables that could be used during execution such as the current time.
 Replicas then fully leverage the potential of their underlying multicore machines to execute all of the requests in parallel. 
@@ -125,7 +125,7 @@ This is accomplished by relying on cryptographic primitives such as Message Auth
 As mentioned in the previous subsection, Eve replicas compute a hash of their state after processing a batch of requests by each using a Merkle tree for efficiency. 
 After computing the root hash of the tree, replicas sign and send to a separate set of verification machines a signed token that consists of the root hash they started with before processing the current batch, and the hash of their state after processing the batch in a parallel manner.
 
-The verification machines then run an agreement protocol on the tokens (which are the hashes of each replica's state) submitted to them by all the replicas. This protocol is explained at length in Kapritsos' thesis and the original Eve protocol paper \cite{eve, manosThesis}.
+The verification machines then run an agreement protocol on the tokens (which are the hashes of each replica's state) submitted to them by all the replicas. This protocol is explained at length in Kapritsos' thesis and the original Eve protocol paper \cite{manosThesis, eve}.
 During the process of this agreement protocol, the verifiers can decide that a view change is required which allows this system to tolerate even Byzantine failures \cite{upRight}.
 At the end of agreement in the simple case, all of the tokens  match and the verifiers instruct the primary to release the result of the computation to the clients. 
 This is achieved by responding to the replicas with a ``commit" message. 
@@ -154,7 +154,7 @@ Eve was shown to outperform Remus by a factor of 4.7x while using orders of magn
 
 In the last chapter we saw that the replicated state machine abstraction can be used successfully in a parallel environment to achieve serious performance improvements in terms of request throughput. 
 Systems today are rarely well described by the simple client-server model.
-Instead, most services need to interact with other services while processing a request from a client \cite{spanner, tao, dynamo}. 
+Instead, most services need to interact with other services while processing a request from a client \cite{tao, spanner, dynamo}. 
 
 For example, if a client visits a cloud file storage website \cite{dropbox}, the server handling the client's request needs to make what we will refer to as a ``nested request'' to a separate service. This nested request functions to retrieve the names of the client's files, before sending the contents of the webpage back to the client. Figure \ref{anatomy} shows the anatomy of a client request that we will be considering for the for the rest of this paper. In the diagram, you can think of the local computation as the time that the webserver spends rendering the HTML to return and the remote computation as the remote service loading the user's files for this example.
 
@@ -175,7 +175,7 @@ Outside of these periods, Adam tolerates arbitrary network delays and lost messa
 
 The Adam prototypes described in this paper can be independently configured with their own fault tolerance parameters. 
 Just as in the UpRight system \cite{upRight}, Adam is guaranteed to be able to respond to clients in the presence of at most $u$ failures (commission or omission) and is guaranteed that any response sent to a correct client is correct in the presence of up to $r$ commission failures and any number of omission failures. 
-We will assume that no failures in the system can break cryptographic primitives which could for example allow failed nodes to forge a correct node's MAC. This assumption was also made in Eve \cite{eve, manosThesis}.
+We will assume that no failures in the system can break cryptographic primitives which could for example allow failed nodes to forge a correct node's MAC. This assumption was also made in Eve \cite{manosThesis, eve}.
 
 \section{Initial Approaches}
 
@@ -458,7 +458,7 @@ We miss this mark by progressively more for shorter requests as the overhead bec
 \begin{figure}[h]
 \centering
 \includegraphics[width=1.0\textwidth]{graphs/merkleimpact/graph.png}
-\caption{\label{scalingmedmerkletree}Merkle tree impact on throughput relative to sequential execution baseline for large requests.}
+\caption{\label{scalingmedmerkletree}Merkle tree impact on throughput relative to the sequential execution baseline for large requests.}
 \end{figure}
 
 The Merkle tree implementation that we used appears to be the main source of overhead in this system which can be seen in Figure \ref{scalingmedmerkletree}. 
@@ -534,11 +534,11 @@ Even systems like Eve however do not immediately perform well in an environment 
 We have presented a novel approach to providing the replicated state machine abstraction in an environment with communicating services that leverages both the multicore nature of today's machines and pipelining techniques to improve resource utilization. 
 
 We found through the use of microbenchmarks that our design and implementation allows a workload of heavy requests to scale over $21$ times the throughput of a naive sequential implementation in a non-replicated setting with 16 core machines.
-In a fully replicated and fault tolerant setting, we achieved a over $12x$ times the throughput of a naive sequential approach with just 8 cores per execution server in our microbenchmarks.
+In a fully replicated and fault tolerant setting, we achieved $12.9x$ the throughput of a naive sequential approach with just 8 cores per execution server in our microbenchmarks.
 Although our current results on smaller request sizes do not scale as well with the number of cores in the system, we believe that the issues with our system are implementation specific and are exacerbated by our lack of access to a cluster large enough to saturate our system with client requests.
 We have demonstrated that speculative execution based multithreading techniques can be used in this environment to scale the system with the number of cores of the execution replicas and that pipelining can be applied to these multi-threaded techniques to nearly double the performance of such a SMR system.
 
-\bibliographystyle{unsrt}
+\bibliographystyle{plain}
 \bibliography{bib}
 
 \end{document}
