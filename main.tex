@@ -327,7 +327,7 @@ The other modifications to Eve involved adding support for multiple checkpoints 
 
 Execution threads were controlled in this implementation by the Batch Manager (BM) which handled the logic of making sure all threads had ``hit a wall'' and initiated the checkpoint operation for each execution thread. 
 This BM was also intended to handle ensuring that the all replicas were at the same state at each wall, which involved sending off a hash of the replica's state and initiating a rollback if needed. 
-When we received the code however, this work was largely not finished as the existing multi-threaded attempt was intended to simply demonstrate that speculative execution could still provide performance gains in this environment.
+When we received the code however, this verification process was largely not finished as the existing multi-threaded attempt was intended to simply demonstrate that speculative execution could still provide performance gains in this environment.
 
 \subsection{Sequential Pipeline Manager}\label{SPM}
 
@@ -421,7 +421,8 @@ This deterministic execution can even be performed in a sequential pipelined man
 
 If instead we rollback to right before the threads in a group make a nested request, our system must restore the state of all execution threads to the state they had when the latest checkpoint was taken. After doing so and setting the new active group successfully, the system will switch all threads into a sequential deterministic mode to ensure progress and convergence.
 We use Apache's Commons Javaflow library \cite{javaflow}, specifically the Continuations objects in this library, to checkpoint the stack of each execution thread.
-This allows us to restore this stack during a rollback and guarantee that all execution threads are in the exact state they were in right before the nested request was made on each replica.
+In addition to the stack, Adam also requires that the objects referenced in the stack are deep copied to the Merkle tree, an operation that is automatically performed simply by annotating the prototype code.
+This allows us to restore this stack and all referenced objects during a rollback and guarantee that all execution threads are in the exact state they were in right before the nested request was made on each replica.
 These Continuation objects with the stack of each thread are stored in the same Merkle tree data structure that Eve used which allows the replicas to make sure that they also have the same recorded stacks for each execution thread whenever a verification is performed. 
 This also allows replicas to receive continuations in a state transfer and immediately start the execution threads at the same point in the execution. 
 
@@ -504,9 +505,9 @@ This work built off of existing work from the University of Texas at Austin Labo
 
 \section{Replicated Remote Procedure Calls}
 
-The concept of a replicated RPC has been around for decades \cite{rrpc, ftrpc}. 
+The concept of a replicated RPC has been around for decades \cite{rrpc, ftrpc}.
 Such a system allows multiple replicated modules to interact through a procedure call interface presented to the system designer.
-Replicated RPC was explored before advancements were made in the area of speculative execution and as a result the systems in literature rely on sequential execution to maintain consistency between replicas and would therefore would have poor resource utilization when compared to Adam.
+Replicated RPC was explored before advancements were made in the area of speculative execution and as a result the systems in literature rely on sequential execution (or at minimum serialization of requests) to maintain consistency between replicas. 
 
 \section{Passive Replication}
 
