@@ -1,4 +1,5 @@
 \documentclass[11pt, oneside]{report}
+\usepackage[margin=1.5in]{geometry}
 \usepackage{setspace}
 \usepackage[utf8]{inputenc}
 \usepackage{amsmath}
@@ -199,7 +200,7 @@ As a result, the execution of $12$ client requests that require an equal amount 
 
 \begin{figure}[h]
 \centering
-\includegraphics[width=0.85\textwidth]{NaiveSequential.png}
+\includegraphics[width=1.0\textwidth]{NaiveSequential.png}
 \caption{\label{NaiveSequential}An example execution of $12$ client requests with a naive sequential implementation. No checkpoints are needed for this approach.}
 \end{figure}
 
@@ -215,7 +216,7 @@ If all replicas were in the same state after processing these prefixes of the cl
 
 \begin{figure}[h]
 \centering
-\includegraphics[width=0.85\textwidth]{Parallel.png}
+\includegraphics[width=1.0\textwidth]{Parallel.png}
 \caption{\label{parallel}An example execution of $12$ client requests with the modified Eve parallel approach. For $12$ requests on $2$ execution threads, $12$ time slices are used and $7$ total checkpoints are performed.}
 \end{figure}
 
@@ -235,7 +236,7 @@ It is then clear that if it were possible to perform more work while waiting for
 
 \begin{figure}[h]
 \centering
-\includegraphics[width=0.85\textwidth]{SequentialPipelined.png}
+\includegraphics[width=1.0\textwidth]{SequentialPipelined.png}
 \caption{\label{seqpipe}An example execution of $12$ client requests with the single-threaded pipelining approach. For $12$ requests on $2$ execution threads, $13$ time slices are used and no checkpoints are performed because all execution is deterministic.}
 \end{figure}
 
@@ -269,7 +270,7 @@ In order to better understand our approach to combining these techniques, let us
 
 \begin{figure}[h]
 \centering
-\includegraphics[width=0.85\textwidth]{PipelinedParallel.png}
+\includegraphics[width=1.0\textwidth]{PipelinedParallel.png}
 \caption{\label{parpipe}An example execution of $12$ client requests in the multi-threaded pipelining approach we implemented. Two groups of two execution threads each can process $12$ client requests in just $7$ time slices.}
 \end{figure}
 
@@ -447,7 +448,7 @@ The other studies described in this setting were performed by using each 16 core
 
 \begin{figure}[h]
 \centering
-\includegraphics[width=0.85\textwidth]{graphs/requestweights/graph.png}
+\includegraphics[width=1.0\textwidth]{graphs/requestweights/graph.png}
 \caption{\label{scaling}Adam speedup over sequential performance for small, medium, and large requests.}
 \end{figure}
 
@@ -460,7 +461,7 @@ We miss this mark by progressively more for shorter requests as the overhead bec
 
 \begin{figure}[h]
 \centering
-\includegraphics[width=0.85\textwidth]{graphs/merkleimpact/graph.png}
+\includegraphics[width=1.0\textwidth]{graphs/merkleimpact/graph.png}
 \caption{\label{scalingmedmerkletree}Merkle tree impact on throughput relative to sequential execution baseline for large requests.}
 \end{figure}
 
@@ -474,7 +475,7 @@ This could be achieved through better detection of new objects in the replica th
 
 \begin{figure}[h]
 \centering
-\includegraphics[width=0.85\textwidth]{graphs/latencythroughput/graph.png}
+\includegraphics[width=1.0\textwidth]{graphs/latencythroughput/graph.png}
 \caption{\label{head2head}Latency-Throughput graphs of Adam for large requests with all four approaches.}
 \end{figure}
 
