@@ -491,7 +491,7 @@ This shows that our pipelining improvements achieve close to the throughput doub
 \chapter{Future Work}\label{FutureWork}
 
 One proposed improvement to the described design that we did not implement is an optimization for the verification process.
-The idea is to combine the nested requests with the verification requests, eliminating the need for the verifiers and this extra round trip.
+The idea is to combine the nested requests with the verification requests, eliminating the need for the verifiers and the extra round trip they require.
 This approach does however require that the remote service is aware that the service making nested requests might have failures of commission while currently the remote service just has to treat Adam as a client that might make repeated requests with the same sequence numbers. 
 In practice, we found that this round trip was not the bottleneck of the system, but this improvement could still easily be made.
 
@@ -531,12 +531,12 @@ In the common case, Adam would only have to transmit hashes to guarantee consist
 Traditional approaches to state machine replication have used deterministic single-threaded execution to guarantee that replicas agree on the same final state. Although these approaches are straightforward, they fail to take advantage of the multicore nature of today's machines. 
 In addition, these approaches are ill-suited to an environment with communicating services. This is because communication with other services requires a sequential execution thread to block while waiting for a response. 
 
-Newer techniques such as the Eve protocol \cite{eve} have leveraged speculative execution to allow for the replicated state machine abstraction to be multi-threaded.
+Newer techniques such as the Eve protocol \cite{eve} have leveraged speculative execution to allow SMR systems to be multi-threaded.
 Even systems like Eve however do not immediately perform well in an environment with communicating services and known pipelining techniques can be effectively used to improve performance.
 We have presented a novel approach to providing the replicated state machine abstraction in an environment with communicating services that leverages both the multicore nature of today's machines and pipelining techniques to improve resource utilization. 
 
 We found through the use of microbenchmarks that our design and implementation allows a workload of heavy requests to scale over $21$ times the throughput of a naive sequential implementation in a non-replicated setting with 16 core machines.
-In a fully replicated and fault tolerant setting, we achieved $12.9x$ the throughput of a naive sequential approach with just 8 cores per execution server in our microbenchmarks.
+In a fully replicated and fault tolerant setting, we achieved $12.9$x the throughput of a naive sequential approach with just 8 cores per execution server in our microbenchmarks.
 Although our current results on smaller request sizes do not scale as well with the number of cores in the system, we believe that the issues with our system are implementation specific and are exacerbated by our lack of access to a cluster large enough to saturate our system with client requests.
 We have demonstrated that speculative execution based multithreading techniques can be used in this environment to scale the system with the number of cores of the execution replicas and that pipelining can be applied to these multi-threaded techniques to nearly double the performance of such a SMR system.
 
