@@ -287,8 +287,7 @@ Chapter \ref{AdamImplementation} will explain at length the steps we took to con
 Figure \ref{parpipe} shows what an execution of $12$ client requests would look like in our multi-threaded and pipelined system with two groups of two execution threads each. 
 Notice that only one group is performing local computation at a time (the dark rectangles) but multiple threads within a group are running simultaneously.
 Also notice that the full execution of all $12$ client requests requires only $7$ of the same time slices used in the other diagrams.
-This abstraction also slightly affects the total number of checkpoints that must be performed from the original multi-threaded approach. 
-In the figure it can be seen that checkpoints are taken at 8 different times as opposed to the previously required 7 since all execution threads are required to checkpoint at the end of a batch.
+This abstraction also does not affect the total number of checkpoints that must be performed from the original multi-threaded approach.
 
 \section{Theoretical Benefits}
 
@@ -434,8 +433,8 @@ Since we know that all execution threads were in the same state before making th
 
 \chapter{Evaluation and Results}\label{AdamResults}
 
-When we finished implementing the multi-threaded and pipelined version of Adam, we were dismayed to find that our throughput increase numbers were much lower than we had hoped. 
-In fact for a variety of reasons, we first saw that using eight threads in Adam only resulted in less than a 4x throughput increase over the naive sequential implementation for very large requests. 
+When we finished implementing the multi-threaded and pipelined version of Adam, we were dismayed to find that our throughput increase results we were observing were much lower than we had hoped. 
+For a variety of reasons, we first saw that using eight threads in Adam only resulted in less than a 4x throughput increase over the naive sequential implementation for very large requests when we expected something closer to a 16x improvement. 
 We then took a methodical journey through several heinous bugs and the intricacies of this design until we arrived at much more satisfying performance results. 
 For details on the approach we took to correcting our implementation, and more about the problem that we are trying to solve in general, please read Jim Given's thesis.
 
@@ -453,10 +452,10 @@ The fully replicated study described in this chapter was performed by using each
 
 One of our chief concerns when evaluating the performance of our system was to see how the system scaled with additional parallel execution threads. Figure \ref{scaling} shows the factor of throughput increase that we achieve by adding more execution threads to our system in an unreplicated environment. 
 These numbers were obtained by running our system with three groups of $x$ threads each where $x$ is the number found on the horizontal axis. 
-We then took the average saturated throughput of the system for each number of threads and divided it by the throughput that a naive sequential implementation achieves for each size of request.
+We then took the saturated throughput of the system for each number of threads and divided it by the throughput that a naive sequential implementation achieves for each size of request.
 As mentioned in Chapter \ref{AdamDesign}, we expected the theoretical maximum benefit of our system to have 32 times the throughput of the baseline, gaining a factor of 16 improvement from utilizing 16 cores and then doubling the throughput due to the two stage pipeline.
 We come the closest to this theoretical maximum with large (10 ms local computation and 10ms remote computation) requests  we believe because the computation time helps mask the overhead introduced by the checkpointing and the verification stage.
-We miss this mark by progressively more for shorter requests as the overhead becomes more pronounced and possibly due to the small number of machines we had to generate client requests.
+We miss this mark by progressively more for shorter requests as the overhead becomes more pronounced and possibly due to bottlenecks in the system when processing larger numbers of client requests that we have not yet identified.
 
 \begin{figure}[h]
 \centering
@@ -464,7 +463,7 @@ We miss this mark by progressively more for shorter requests as the overhead bec
 \caption{\label{scalingmedmerkletree}Merkle tree impact on throughput relative to the sequential execution baseline for large requests.}
 \end{figure}
 
-The Merkle tree implementation that we used appears to be the main source of overhead in this system which can be seen in Figure \ref{scalingmedmerkletree}. 
+The Merkle tree implementation that we used appears to be a major source of overhead in this system which can be seen in Figure \ref{scalingmedmerkletree}. 
 In this graph, we compare the scaling behavior of the unreplicated system when using a real Merkle tree implementation to when we use a fake Merkle tree.
 With the fake Merkle tree, we perform all of the identical operations that we perform with the real tree but all hashing and Merkle tree versioning operations complete instantly.
 With the fake tree in this unreplicated setting we achieve a maximum of just over $30$ times the throughput ($1371$ requests per second) of the naive sequential baseline execution ($45$ requests per second) out of a theoretically possible $32$ times the throughput.
@@ -478,14 +477,14 @@ This could be achieved through better detection of new objects in the replica th
 \caption{\label{head2head}Latency-Throughput graphs of Adam for large requests with all four approaches.}
 \end{figure}
 
-We also compared our Adam implementation head to head with the previous two approaches described in Chapter \ref{Adam} as well as a naive sequential implementation. 
+We also compared our Adam implementation head to head with the previous three approaches described in Chapter \ref{Adam}: the naive sequential approach, the single-threaded pipelined approach, and the multi-threaded non-pipelined approach. 
 Figure \ref{head2head} shows latency throughput graphs for our implementation running with three groups of eight threads each in a fully replicated environment. 
-We compare our implementation in this graph to the multi-threaded but non-pipelined approach running with 8 threads, and with the sequential-pipelined approach running with three threads (which is equivalent to our implementation using three groups) as well as the naive sequential implementation. 
+We compare our implementation in this graph to the multi-threaded but non-pipelined approach running with 8 threads, and with the single-threaded pipelined approach running with three threads (which is equivalent to our implementation using three groups) as well as the naive sequential implementation. 
 
 It can be seen from the graph that the naive sequential implementation achieves nearly $50$ requests per second which is the theoretical maximum throughput for $20$ms requests ($10$ms for the local and $10$ms remote computation). 
-The sequential pipelined approach approaches twice the performance of the naive implementation, once again due to the fact that the pipeline is of depth two (the local service and the remote service).
+The sequential pipelined approach approaches twice the performance of the naive implementation, due to the fact that the pipeline is of depth two (the local service and the remote service).
 The original multi-threaded Adam approach achieved a throughput of just over $300$ requests per second with $8$ execution threads. We would expect in this scenario at most an 8x increase in throughput over the naive sequential approach which would mean a throughput of $360$ requests per second.
-We miss this mark by a little more than one multiple of the naive approach throughput which we believe is mostly due to the added overhead of the verification stage.
+We miss this mark by a little more than one multiple of the naive sequential approach throughput which we believe is mostly due to the added overhead of the verification stage.
 Our multi-threaded and pipelined implementation achieves a maximum throughput of at most $582$ requests per second with this setup while the original multi-threaded approach achieves slightly over $300$ at its saturation point. 
 This shows that our pipelining improvements achieve close to the throughput doubling that we expected.
 
