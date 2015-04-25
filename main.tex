@@ -7,6 +7,7 @@
 \usepackage{graphicx}
 \usepackage{tocbibind}
 \usepackage{url}
+\usepackage{cite}
 
 \title{Communicating Replicated State Machines}
 \author{David Wetterau}
@@ -22,36 +23,39 @@
 Computing systems today are rarely self-contained units. 
 The desire for more levels of abstraction and cleaner separations of responsibilities has led to systems being modularized into services that must communicate and work together to accomplish tasks. 
 Not only is this separation observed within single systems, but also in systems that interact with external services such as cloud based storage or computing providers \cite{tao, spanner, dynamo}. 
-In this paper we will present a way to build these systems in a highly available and fault tolerant way by building upon the existing techniques of State Machine Replication (SMR) and pipelining.
+In this paper we will present a way to build these systems in a highly available and fault tolerant way by building upon the existing techniques of State Machine Replication (SMR) \cite{practicalBFT, hq, zyz, paxos, paxosMadeSimple, schneider} and pipelining.
 
-Unfortunately, SMR as it exists today is not immediately fit for this environment where services communicate. 
-Previous work on SMR has focused on the client-server model, where the replicated state machine behaves as a single-correct-server from the perspective of the clients making requests \cite{schneider}. 
-This behavior does not allow these systems to communicate with other services because doing so could expose the intermediate state of the system which is not guaranteed to be consistent in this abstraction.
+Unfortunately, SMR as it exists today is not immediately fit for an environment where services communicate. 
+Previous work on SMR has focused on the client-server model, where the replicated state machine behaves as a single-correct-server from the perspective of the clients making requests \cite{schneider}.
+When replicated services communicate however, it is important that this single-correct-server abstraction is maintained not only to clients of the service but also to other services. 
+Failing to maintain the single-correct-server abstraction to other services could expose the intermediate state of the system which is not guaranteed to be consistent in this abstraction.
 
-Aside from consistency issues, traditional SMR also suffers from fundamental performance deficiencies in today's computing environment. 
-Many replication protocols rely on the sequential execution of commands to guarantee that replicas operate in a deterministic manner \cite{practicalBFT, upRight, hq, paxos}. 
-Not only does sequential execution do a poor job of leveraging abundantly available multicore machines, it also requires that a system in this environment remain idle while waiting for the response of a request issued to another service.
+% TODO: make the previous sentence more clear, this is critical to the motivation of this work and Alvisi was confused by it
 
-In this paper, we will present a technique to adapt the SMR technique to the environment described above. 
+Aside from consistency issues in an environment with communicating replicated services, traditional SMR also suffers from fundamental performance deficiencies in today's computing environment. 
+Many SMR protocols rely on the sequential execution of commands to guarantee that replicas operate in a deterministic manner \cite{practicalBFT, upRight, hq, paxos}. 
+Not only does sequential execution do a poor job of leveraging abundantly available multicore machines, it also requires that a system that communicates with other services remain idle while waiting for the response of a request issued to another service.
+
+In this paper, we will present a technique to efficiently perform SMR in a system where replicated services must communicate while processing client requests.
 We will first leverage speculative execution \cite{eve, zyz} to allow our system to be multi-threaded and therefore better utilize the multicore nature of machines today. 
-In addition, we will show how to pipeline a speculative execution system to mitigate the blocking of the system while waiting for the response of communications it may perform. 
-This work builds on contributions originally made by the Laboratory for Advanced Systems Research at the University of Texas at Austin and was a joint effort between David Wetterau and Jim Given. 
-We highly recommend reading both theses on this work to get the complete understanding of this project.
+We will then show how to pipeline a speculative execution system to avoid unnecessary blocking when waiting for responses to requests sent to other services.
+This work builds on contributions originally made by the Laboratory for Advanced Systems Research at the University of Texas at Austin \cite{eve, ManosThesis} and was a joint effort between David Wetterau and Jim Given. 
+We highly recommend reading both this thesis and Given's thesis \cite{jim} on this work to get the complete understanding of this project.
 
 The rest of this paper is structured as follows. 
-Chapter \ref{Background} will provide a comprehensive background on the replicated state machine abstraction and the Eve system, which pioneered the use of multi-threaded speculative execution in an SMR system. 
-Chapter \ref{Adam} will introduce Adam, a system to provide high availability in an environment with services that communicate not only with clients, but also with other services. 
-Chapter \ref{AdamDesign} will describe at a high level the design and benefits of multi-threaded pipelining in Adam. 
-Chapter \ref{AdamImplementation} will explain our implementation of Adam in detail along with the correctness guarantees Adam provides. 
-Chapter \ref{AdamResults} will display our evaluation and the performance of Adam. 
-Chapter \ref{FutureWork} will explain some of the future directions we believe would be fruitful for this system.
-Chapter \ref{RelatedWork} will discuss work related to Adam and the conclusion of this thesis will be presented in Chapter \ref{Conclusion}.
+Chapter \ref{Background} provides a comprehensive background on the replicated state machine abstraction and the Eve system, which pioneered the use of multi-threaded speculative execution in an SMR system. 
+Chapter \ref{Adam} introduces Adam, a system to provide high availability in an environment with services that communicate not only with clients, but also with other services. 
+Chapter \ref{AdamDesign} describes at a high level the design and benefits of multi-threaded pipelining in Adam. 
+Chapter \ref{AdamImplementation} explains our implementation of Adam in detail along with the correctness guarantees Adam provides. 
+Chapter \ref{AdamResults} displays our evaluation and the performance of Adam. 
+Chapter \ref{FutureWork} explains some of the future directions we believe would be fruitful for this system.
+Chapter \ref{RelatedWork} discusses work related to Adam and the conclusion of this thesis is presented in Chapter \ref{Conclusion}.
 
 \chapter{Background}\label{Background}
 \section{State Machine Replication}
 One way to allow a distributed system to be highly available in the presence of failures is to replicate the system.
 State Machine Replication (SMR) is a way to guarantee that multiple replicas, either virtual or physical, produce the same outputs when given the same commands. 
-In this section we will explain the abstraction of a replicated state machine along with how SMR has been traditionally implemented.
+In this section we explain the abstraction of a replicated state machine along with how SMR has been traditionally implemented.
 
 At the core of SMR is a deterministic state machine. 
 A state machine is a model of computation that consists of state variables, which store the state of the machine, and commands that transform this state. 
