@@ -39,7 +39,7 @@ Not only does sequential execution do a poor job of leveraging abundantly availa
 In this paper, we will present a technique to efficiently perform SMR in a system where replicated services must communicate while processing client requests.
 We will first leverage speculative execution \cite{eve, zyz} to allow our system to be multi-threaded and therefore better utilize the multicore nature of machines today. 
 We will then show how to pipeline a speculative execution system to avoid unnecessary blocking when waiting for responses to requests sent to other services.
-This work builds on contributions originally made by the Laboratory for Advanced Systems Research at the University of Texas at Austin \cite{eve, ManosThesis} and was a joint effort between David Wetterau and Jim Given. 
+This work builds on contributions originally made by the Laboratory for Advanced Systems Research at the University of Texas at Austin \cite{eve, manosThesis} and was a joint effort between David Wetterau and Jim Given. 
 We highly recommend reading both this thesis and Given's thesis \cite{jim} on this work to get the complete understanding of this project.
 
 The rest of this paper is structured as follows. 
@@ -64,45 +64,51 @@ When a replica in a SMR system receives a request, it performs the command by tr
 For a write request from a client, the state machine might end in a state different from where it began (this can be thought of as the value of some variable being updated). 
 In the case of a read request, the state machine returns to the same state it started in (no state was changed in the end) \cite{schneider}.
 
+The safety requirement of SMR is that the committed state and outputs of each correct replica are the same and the liveness requirement is that all requests eventually commit.
 The correctness goal of SMR is to provide a system that retains both safety and liveness in the presence of replica failures. 
 SMR can be adapted to work under many different failure models simply by adjusting the number of replicas. 
-For a weaker failure model, one only needs to either increase the number of replicas in the system or decrease the number of tolerated failures accordingly. 
-In order to provide correctness, the requirement of SMR is that the observable state (including but not limited to the outputs) of each state machine must always be the same across all replicas. 
-This is simply because if all replicas have the same observable state, any replica on its own could communicate with clients if another crashed.
+For a weaker failure model, one only needs to either increase the number of replicas in the system or decrease the number of tolerated failures accordingly.
+In order to provide correctness, the requirement of SMR is that the observable state (including but not limited to the output) of each state machine must always be the same across all correct replicas.
+As long as all correct replicas have the same observable state and produce the same output, voting can be used to mask the outputs of faulty replicas.
 
-To provide this correctness requirement, SMR has traditionally been implemented by only allowing sequential execution of commands \cite{paxos, paxosMadeSimple, schneider}. 
-The reason behind this is that if commands are first ordered the same way on each replica, and are then executed one at a time in this deterministic way, then all replicas will arrive at the same state. 
+To provide this correctness requirement, SMR has traditionally been implemented by only allowing sequential execution of commands \cite{paxos, paxosMadeSimple, schneider}.
+This is because if commands are first ordered the same way on each replica, and are then executed one at a time in this deterministic way, then all correct replicas will arrive at the same state. 
 This is easy to see because each state machine simply follows the exact same state transitions in the same order. 
 This design is referred to as the agree-execute approach, and has been applied in a wide range of systems including the original Paxos protocol \cite{paxos}.
 
 Sequential execution was an acceptable option when SMR was first introduced since single core performance was rapidly increasing and multicore machines were not widespread. 
 Now that the world has instead shifted to increasing the amount of parallelism to improve performance, we find that sequential execution is a serious limitation. 
-If we tried to naively relax this sequential execution restriction and run commands using multiple threads, there would be no guarantee that the replicas would arrive in the same final state since the commands could be interleaved non-deterministically across the threads. 
+If we tried to naively relax this sequential execution restriction and run commands using multiple threads, there would be no guarantee that the correct replicas would arrive in the same final state since the commands could be interleaved non-deterministically across the threads. 
 In the next section, we will see one way that we can still provide the replicated state machine abstraction without sequential execution by using speculative execution instead. 
  
 
 \section{Eve: Execute-Verify Replication}
-
-In the previous section, we explored why the majority of SMR implementations relied on the agree-execute architecture to ensure that replicas converged to the same ending state. 
-This approach guarantees convergence through determinism which sequential execution provides. 
-One observation that can be made about these approaches is that they have effectively reduced the actual safety requirement of SMR (that the observable state of each state machine is the same across all replicas) to the problem of guaranteeing that all replicas agree on an order of commands to execute. 
+The agree-execute approach guarantees convergence through determinism which sequential execution provides. 
+One observation that can be made about these approaches is that they have effectively reduced the actual safety requirement of SMR (that the observable state of each state machine is the same across all correct replicas) to the problem of guaranteeing that all correct replicas agree on an order of commands to execute. 
 Eve is a system that was developed at the University of Texas at Austin that uses the actual safety requirement of SMR to enable multi-threaded execution \cite{manosThesis, eve}.
 
-Eve uses what is referred to as speculative execution \cite{eve, zyz} in a way that provides the safety guarantee of SMR while still providing liveness to form a correct replicated state machine abstraction. 
-In Eve, replicas are given a set, or batch, of client requests to execute from the primary, however they are not required to execute these requests sequentially in the order that they appear in the set. 
-In addition to the set of requests given to each replica, sources of non-determinism must be  eliminated such as seeds for the random number generator and other environment variables that could be used during execution such as the current time.
+Eve uses what is referred to as speculative execution \cite{eve, zyz} in a way that provides the safety guarantee of SMR while not requiring that requests are executed sequentially. 
+The Eve protocol begins by clients sending requests to the current primary execution replica.
+This primary replica then gives a set, or batch, of client requests to execute, however they are not required to execute these requests sequentially in the order that they appear in the set. 
+The primary replica also gives each replica a seed to a random number generator and other environment variables (such as the current time) that could potentially be other sources of non-determinism during execution.
 Replicas then fully leverage the potential of their underlying multicore machines to execute all of the requests in parallel. 
-At the end of the execution, replicas compare states with each other in a verification stage and if enough replicas arrived at the same state, the results of the client requests are released. 
+At the end of the execution, replicas compare states with each other in a verification stage and if enough correct replicas arrived at the same state, the results of the client requests are released. 
 This step can be thought of as resolving the speculative execution. 
 If not enough replicas agree on the final state, it must be due to a non-deterministic interleaving of the requests, so each replica simply re-executes all of the requests in the group in a deterministic order sequentially to guarantee both safety and liveness. 
-This process of speculatively executing requests in parallel and then verifying that all replicas arrived at the same ending state is referred to as execute-verify.
+This process of speculatively executing requests in parallel and then verifying that all correct replicas arrived at the same ending state is referred to as execute-verify and Figure \ref{eveDiagram} depicts an overview of the Eve protocol.
+
+\begin{figure}[h]
+\centering
+\includegraphics[width=0.75\textwidth]{eveOverview.png}
+\caption{\label{eveDiagram} An overview of the Eve protocol as it appears in the original paper \protect\cite{eve}.}
+\end{figure}
 
 In theory the execute-verify approach is straightforward, but in order for Eve to work well, it is important that the case that requests have to be re-executed in a sequential manner is rare. 
 If this were not the case, Eve would be strictly worse than SMR implemented sequentially because of the need to execute requests multiple times to guarantee safety. 
-To reduce the likelihood that request interleavings cause the final states of replicas to diverge, the authors introduce what they call the mixer which is discussed in \ref{EveMixer}. 
-After Eve runs the mixer on the incoming requests, it then proceeds to the execution stage which is described in \ref{EveExecution}. 
+To reduce the likelihood that request interleavings cause the final states of replicas to diverge, the authors introduce what they call the mixer (discussed in Section \ref{EveMixer}). 
+After Eve runs the mixer on the incoming requests, it then proceeds to the execution stage described in Section \ref{EveExecution}. 
 After executing a batch of requests, Eve moves on to the verification stage which guarantees that replicas compare their states efficiently and in a way that tolerates even Byzantine failures. 
-This verification stage is described in \ref{EveVerification} and the final results that the authors were able to produce with Eve are presented in \ref{EveResults}.
+This verification stage is described in Section \ref{EveVerification} and the final results that the authors were able to produce with Eve are presented in Section \ref{EveResults}.
 
 \subsection{The Mixer}\label{EveMixer}
 Given a set of requests submitted to each replica in the Eve system by the current primary, each replica's mixer constructs a batch of requests to schedule for execution in the following way. 
@@ -111,7 +117,7 @@ If the request does not conflict, it adds the request to the next batch to execu
 If it does conflict, the mixer passes over the request. 
 After a complete pass, the mixer releases the batch to be executed and after doing so, repeats this process on the requests that were left out of the batch on the previous pass.
 
-The authors found that mixers were both easy to implement for various real applications such as the TPC-W benchmarks, and greatly reduced the likelihood that replicas would diverge due to thread interleavings \cite{eve}. 
+The authors found that mixers were both easy to implement for various real applications such as the TPC-W benchmarks, and greatly reduced the likelihood that replicas would diverge because of thread interleavings \cite{eve}. 
 It is important to note that while the mixer does improve performance of the system greatly, it is not needed for either the safety or liveness conditions of SMR. 
 Because Eve can re-execute requests sequentially as a fallback, there is no requirement that the requests in a batch do not conflict and therefore there is no required accuracy of the mixer in order for Eve to be correct.
 
@@ -125,9 +131,9 @@ When all of the execution threads in a replica finish performing the commands sp
 This hash of the final state is then used in the verification stage to determine whether or not the parallel execution caused a divergence in the final states of the replicas.
 
 \subsection{The Verification Stage}\label{EveVerification}
-In Eve's verification stage, replicas must compare their final states in an efficient manner that is also resistant to even byzantine failures. 
-This is accomplished by relying on cryptographic primitives such as Message Authentication Codes (MACs) and collision resistant hashes of the states. 
-As mentioned in the previous subsection, Eve replicas compute a hash of their state after processing a batch of requests by each using a Merkle tree for efficiency. 
+In Eve's verification stage, replicas must compare their final states in an efficient manner that is also resistant to even Byzantine failures. 
+This is accomplished by relying on cryptographic primitives such as Message Authentication Codes (MACs) and collision resistant hashes of the states \cite{eve}. 
+As mentioned in the previous subsection, Eve replicas compute a hash of their state after processing a batch of requests by each using a deterministic Merkle tree for efficiency \cite{eve}. 
 After computing the root hash of the tree, replicas sign and send to a separate set of verification machines a signed token that consists of the root hash they started with before processing the current batch, and the hash of their state after processing the batch in a parallel manner.
 
 The verification machines then run an agreement protocol on the tokens (which are the hashes of each replica's state) submitted to them by all the replicas. This protocol is explained at length in Kapritsos' thesis and the original Eve protocol paper \cite{manosThesis, eve}.
@@ -150,7 +156,7 @@ In particular, the designers of Eve demonstrated with microbenchmarks that Eve w
 These numbers did however fall slightly with lightweight requests. 
 They found that the improvement decreased to 10x for 1ms requests and 3.3x for 0.1ms requests mainly due to the inability to saturate the system with client requests and the increased overhead of the checkpointing system relative to the time spent performing computation for each request.
 
-The authors also compared Eve's performance to an existing attempt at performing multi-threaded SMR called Remus. 
+The authors also compared Eve's performance to an existing attempt at performing multi-threaded SMR called Remus \cite{remus}. 
 In Remus, the primary replica executes requests with multiple threads and then transfers its entire state to the other replicas. 
 This approach, referred to as passive replication, both requires considerably more bandwidth than Eve (due to the transfer of full states) and does not protect against commission failures, while Eve does. 
 Eve was shown to outperform Remus by a factor of 4.7x while using orders of magnitude less network bandwidth in the authors' tests.
