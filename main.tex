@@ -28,7 +28,7 @@ In this paper we will present a way to build these systems in a highly available
 Unfortunately, SMR as it exists today is not immediately fit for an environment where services communicate. 
 Previous work on SMR has focused on the client-server model, where the replicated state machine behaves as a single-correct-server from the perspective of the clients making requests \cite{schneider}.
 When replicated services communicate however, it is important that this single-correct-server abstraction is maintained not only to clients of the service but also to other services. 
-Failing to maintain the single-correct-server abstraction to other services could expose the intermediate state of the system which is not guaranteed to be consistent in this abstraction.
+Failing to maintain the single-correct-server abstraction to other services can expose the intermediate state of the system which is not guaranteed to be consistent across all correct replicas in this abstraction.
 
 % TODO: make the previous sentence more clear, this is critical to the motivation of this work and Alvisi was confused by it
 
@@ -154,11 +154,11 @@ Note that this verification stage maintains the liveness property, since it is i
 The experimental evaluation of Eve resulted in promising results for this approach to a multi-threaded replicated state machine. 
 In particular, the designers of Eve demonstrated with microbenchmarks that Eve was capable of a 12.5x speedup over sequential execution using 16 core machines with 10ms requests. 
 These numbers did however fall slightly with lightweight requests. 
-They found that the improvement decreased to 10x for 1ms requests and 3.3x for 0.1ms requests mainly due to the inability to saturate the system with client requests and the increased overhead of the checkpointing system relative to the time spent performing computation for each request.
+They found that the improvement decreased to 10x for 1ms requests and 3.3x for 0.1ms requests mainly because of the inability to saturate the system with client requests and the increased overhead of the checkpointing system relative to the time spent performing computation for each request.
 
 The authors also compared Eve's performance to an existing attempt at performing multi-threaded SMR called Remus \cite{remus}. 
 In Remus, the primary replica executes requests with multiple threads and then transfers its entire state to the other replicas. 
-This approach, referred to as passive replication, both requires considerably more bandwidth than Eve (due to the transfer of full states) and does not protect against commission failures, while Eve does. 
+This approach, referred to as passive replication, both requires considerably more bandwidth than Eve (because of the transfer of full states) and does not protect against commission failures, while Eve does. 
 Eve was shown to outperform Remus by a factor of 4.7x while using orders of magnitude less network bandwidth in the authors' tests.
 
 \chapter{Adam: State Machine Replication with Communicating Services}\label{Adam}
@@ -166,7 +166,7 @@ Eve was shown to outperform Remus by a factor of 4.7x while using orders of magn
 Systems such as Eve can be used successfully in a parallel environment to achieve serious performance improvements in terms of request throughput however systems today are rarely well described by the simple client-server model that Eve adheres to.
 Instead, most services need to interact with other services while processing a request from a client \cite{tao, spanner, dynamo}. 
 
-For example, if a client visits a cloud file storage website \cite{dropbox}, the server handling the client's request needs to make what we will refer to as a ``nested request'' to a separate service. This nested request might function to retrieve the names of the client's files, before sending the contents of the webpage back to the client. Figure \ref{anatomy} shows the anatomy of a client request that we will be considering for the for the rest of this paper. In the diagram, you can think of the local computation as the time that the webserver spends rendering the HTML to return and the remote computation as the remote service loading the user's files for this example.
+For example, if a client visits a cloud file storage website \cite{dropbox}, the server handling the client's request needs to make what we will refer to as a ``nested request'' to a separate service. This nested request might function to retrieve the names of the client's files, before sending the contents of the webpage back to the client. Figure \ref{anatomy} shows the anatomy of a client request that we will be considering for the for the rest of this paper. In the diagram, the local computation can be thought of as as the time that the webserver spends rendering the HTML to return and the remote computation can be thought of as the remote service loading the user's files.
 
 \begin{figure}[h]
 \centering
@@ -257,7 +257,7 @@ Therefore it is clear that if it is possible to perform more work while waiting 
 To build a system that performs pipelining, Kapritsos et al. use multiple threads for ease of implementation but only run them one at a time and schedule them in a deterministic way. 
 Deterministic scheduling and only having a single execution thread running at any point in time guarantees that all requests are executed deterministically, and therefore that all replicas in the system converge without the need for checkpointing or potentially rolling back.
 
-In Figure \ref{seqpipe} you can see the execution of $12$ client requests in a single-threaded pipelined system. Notice that the grey rectangles indicate local computation, or that the replica machine is actually performing work locally. Only one thread is ever performing local computation at a time (guaranteeing determinism), but because of pipelining, the total number of time slices needed is cut almost in half over the naive approach.
+In Figure \ref{seqpipe} the execution of $12$ client requests in a single-threaded pipelined system is depicted. Notice that the grey rectangles indicate local computation, or that the replica machine is actually performing work locally. Only one thread is ever performing local computation at a time (guaranteeing determinism), but because of pipelining, the total number of time slices needed is cut almost in half over the naive approach.
 
 \section{Initial Results}
 
@@ -267,8 +267,8 @@ Even though the throughput increased, it did not seem to be scaling particularly
 Servers with 16 cores running 16 execution threads in this implementation of Adam only had about 4 times the throughput of the same servers running with a single thread each.
 
 The single-threaded pipelining technique described above also showed great potential. 
-For very short client requests (0.1ms each), the service managed to achieve even more than the expected double throughput gain, probably due to the remote service batching requests creating what acted in practice like an additional pipeline stage. 
-For requests that took longer to process (1-10ms each) however, the system successfully achieved an approximately double throughput increase due to the two stage nature of the pipeline: the first being the local computation and the second being the computation on the remote service.
+For very short client requests (0.1ms each), the service managed to achieve even more than the expected double throughput gain, probably because of the remote service batching requests creating what acted in practice like an additional pipeline stage. 
+For requests that took longer to process (1-10ms each) however, the system successfully achieved an approximately double throughput increase because of the two stage nature of the pipeline: the first being the local computation and the second being the computation on the remote service.
 
 \chapter{Multi-Threaded Pipelining in Adam}\label{AdamDesign}
 
@@ -310,7 +310,7 @@ The naive sequential implementation (Figure \ref{NaiveSequential}) required $24$
 \end{align*}
 
 This number actually converges to the desired 4x as the number of requests run in each batch increases to infinity.
-A formal proof of this fact is available in Jim Given's thesis \cite{jim} but conceptually you can see that the larger the number of requests that each thread must execute, the less the ``unmatched'' slices at the beginning and the end of the batch contribute. 
+A formal proof of this fact is available in Jim Given's thesis \cite{jim} but conceptually it can be seen that the larger the number of requests that each thread must execute, the less the ``unmatched'' slices at the beginning and the end of the batch contribute. 
 
 \chapter{Adam Implementation}\label{AdamImplementation}
 
@@ -450,9 +450,9 @@ We performed the fully replicated study we describe in this chapter by using eac
 One of our chief concerns when we evaluate the performance of our system is to see how the system scales with additional parallel execution threads. Figure \ref{scaling} shows the factor of throughput increase that we achieve by adding more execution threads to our system in an unreplicated environment.
 These numbers are obtained by running our system with three groups of $x$ threads each where $x$ is the number found on the horizontal axis. 
 We then take the saturated throughput of the system for each number of threads and divide it by the throughput that a naive sequential implementation achieves for each size of request.
-As mentioned in Chapter \ref{AdamDesign}, we expect the theoretical maximum benefit of our system to be 32 times the throughput of the baseline, gaining a factor of 16 improvement from utilizing 16 cores and then doubling the throughput due to the two stage pipeline.
+As mentioned in Chapter \ref{AdamDesign}, we expect the theoretical maximum benefit of our system to be 32 times the throughput of the baseline, gaining a factor of 16 improvement from utilizing 16 cores and then doubling the throughput because of the two stage pipeline.
 We come closest to this theoretical maximum with large (10 ms local computation and 10ms remote computation) requests which is because the increased computation time helps mask the overhead introduced by the checkpointing and the verification stage.
-We deviate from the theoretical benefit even more for shorter requests as the overhead becomes more pronounced and possibly due to bottlenecks in the system when processing larger numbers of client requests that we have not yet identified.
+We deviate from the theoretical benefit even more for shorter requests as the overhead becomes more pronounced and possibly because of bottlenecks in the system when processing larger numbers of client requests that we have not yet identified.
 
 \begin{figure}[h]
 \centering
@@ -479,7 +479,7 @@ Figure \ref{head2head} shows latency throughput graphs for our implementation ru
 We compare our implementation in this graph to the multi-threaded but non-pipelined approach running with eight threads, with the single-threaded pipelined approach running with three threads (which is equivalent to our implementation using three groups), and with the naive sequential implementation. 
 
 It can be seen from the graph that the naive sequential implementation achieves close to $50$ requests per second which is the theoretical maximum throughput for $20$ms requests ($10$ms for the local and $10$ms remote computation). 
-The sequential pipelined approach approaches twice the performance of the naive implementation, due to the fact that the pipeline is of depth two (the local service and the remote service).
+The sequential pipelined approach approaches twice the performance of the naive implementation because of the fact that the pipeline is of depth two (the local service and the remote service).
 The original multi-threaded Adam approach achieved a throughput of just over $300$ requests per second with eight execution threads. We would expect in this scenario at most an 8x increase in throughput over the naive sequential approach which would mean a throughput of $360$ requests per second.
 We miss this mark by a little more than one multiple of the naive sequential approach throughput because of to the added overhead of the verification stage.
 Our multi-threaded and pipelined implementation achieves a maximum throughput of at most $582$ requests per second with this setup while the original multi-threaded approach achieves slightly over $300$ at its saturation point. 
@@ -492,10 +492,10 @@ The idea is to combine the nested requests with the verification requests, elimi
 This approach does however require that the remote service is aware that the service making nested requests might have failures of commission while currently the remote service just has to treat Adam as a client that might make repeated requests with the same sequence numbers. 
 In practice, we found that this round trip was not the bottleneck of the system, but this improvement could still easily be made.
 
-As shown in our evaluation of Adam, we did find that our system had much better performance gains on longer client requests than shorter ones due to the overhead that the additional checkpoints incurs in the form of additional Merkle tree computations. 
+As shown in our evaluation of Adam, we did find that our system had much better performance gains on longer client requests than shorter ones because of the overhead that the additional checkpoints incurs in the form of additional Merkle tree computations. 
 We believe that the system could be modified to minimize the total number of checkpoints needed by making much larger groups and not checkpointing until all of the requests in these larger groups are ready to make the nested request.
 
-Another concern with our current implementation is the need to have large batch sizes. With three groups running in the system with 16 threads each, you need at least 48 concurrent and non-conflicting requests to assign each thread a single client request to perform. 
+Another concern with our current implementation is the need to have large batch sizes. With three groups running in the system with 16 threads each, at least 48 concurrent and non-conflicting requests are needed to assign each thread a single client request to perform. 
 To achieve the performance benefits from pipelining that we described in this paper, each execution thread must have multiple requests to process which drastically increases the needed batch size. 
 One proposed solution would be to design the system so that the pipeline is always active, thereby eliminating the need to restart the pipeline with new batches and instead just adding the work to the execution threads' queues. 
 We believe this is possible since we are already taking checkpoints for each request, though it complicates the rollback and work assigning procedures that we describe here.
