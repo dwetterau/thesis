@@ -317,7 +317,7 @@ A formal proof of this fact is available in Jim Given's thesis \cite{jim} but co
 \section{Initial Code Structure}\label{existing}
 
 When we began our contributions to the Adam project, prototype implementations existed for both approaches described in Chapter \ref{Adam}. 
-Before explaining the work that we did to create a multi-threaded pipelined SMR system that used speculative execution, we will examine in detail that existing building blocks that we used to construct our final implementation.
+Before explaining our work to create a multi-threaded pipelined SMR system that uses speculative execution, we examine in detail the existing building blocks that we use to construct our final implementation.
 
 \subsection{Existing Multi-Threaded Adam Implementation}\label{BM}
 
@@ -327,7 +327,7 @@ The other modifications to Eve involved adding support for multiple checkpoints 
 
 Execution threads were controlled in this implementation by the Batch Manager (BM) which handled the logic of making sure all threads had ``hit a wall'' and initiated the checkpoint operation for each execution thread. 
 This BM was also intended to handle ensuring that the all replicas were at the same state at each wall, which involved sending off a hash of the replica's state and initiating a rollback if needed. 
-When we received the code however, this verification process was largely not finished as the existing multi-threaded attempt was intended to simply demonstrate that speculative execution could still provide performance gains in this environment.
+When we received the code however, this verification process was largely not finished as the existing multi-threaded attempt was intended to simply demonstrate that speculative execution could still provide performance gains even with communicating replicated services.
 
 \subsection{Sequential Pipeline Manager}\label{SPM}
 
@@ -339,30 +339,29 @@ This code was very straightforward but it served as the inspiration for the more
 The SPM began the execution of a batch of requests by deterministically assigning requests to each thread in a round-robin fashion.
 Even though the pipeline executed sequentially, the SPM used many lightweight threads to simplify the scheduling process. 
 After assigning work to threads, the SPM notified the first thread to begin. 
-That thread would then start processing the client request until the point that it was ready to make a nested request. 
+That thread would then start processing the client request until it was ready to make a nested request. 
 The active thread at this point would then call a yield function in the SPM to notify it to schedule the next thread. After notifiying, the active thread would immediately make a blocking call to the remote service. 
-When the SPM received this yield notification, it notified the thread with the next higher id than the previous running thread (modulo the number of threads) to begin execution. 
+When the SPM received this yield notification, it notified the thread with the next higher id (modulo the number of threads) to begin execution. 
 Eventually, the last thread with work to do would yield the pipeline, at which point the SPM would schedule the first thread again. 
 
 The first thread would then either continue waiting for the nested request to complete, or would continue executing the client request to completion. 
 After completing a client request, the active thread would either start executing its next assigned request or would notify the SPM if it had executed all of its assigned requests.
 Once all threads had responded in this way, the SPM would finish the batch and release the results to the clients after which it would begin the next batch.
 
-% Maybe rename this to core components or something?
 \section{Core Components}
 
-When implementing Adam with the multi-threaded pipelined approach, we decided to first combine the two existing approaches into one system before implementing the parts of the functionality that were not yet present. 
-We began by adapting the Sequential Pipeline Manager (SPM) to schedule groups of threads instead of just one at a time, and then modified the Batch Manager (BM) to control a group of threads and to behave within the pipeline.
+To implement Adam with the multi-threaded pipelined approach, we first combine the two existing approaches into one system before implementing the parts of the functionality that were not yet present. 
+We begin by adapting the Sequential Pipeline Manager (SPM) to schedule groups of threads instead of just individual threads, and then modify the Batch Manager (BM) to control a group of execution threads that can be scheduled onto and off of the pipeline.
 After these modifications, we finished implementing parts of Adam that had not been implemented for the initial proof of concepts such as the verification stage and made appropriate modifications to other existing parts of the code base to support both multi-threading and pipelining simultaneously.
 
 \subsection{The Parallel Pipeline Manager}
 
-By taking the structure of the existing SPM written by Kapritsos (and described in \ref{SPM}), we built what we call the Parallel Pipeline Manager (PPM) to schedule groups of threads in the context of the pipeline. 
-The changes that we made to the SPM to control groups of threads mostly centered around initialization and the detection of the correct time to swap groups on or off the execution pipeline.
+By taking the structure of the existing SPM written by Kapritsos (and described in Section \ref{SPM}), we build what we call the Parallel Pipeline Manager (PPM) to schedule groups of threads in the context of the pipeline. 
+The changes that we make to the SPM to control groups of threads mostly center around initialization and the detection of the correct time to swap groups on to or off of the execution pipeline.
 
 Within the SPM, a simple mechanism was used to schedule client requests to execution threads that ran one at a time in a pipelined fashion. 
 Essentially, the SPM would assign the requests to threads by giving each thread one request before giving the first thread a second request and so on. 
-In the PPM, we instead have to schedule requests within a batch to both groups of threads and to threads within those groups. 
+In the PPM, we instead must schedule requests within a batch to both groups of threads and to threads within those groups. 
 This is performed after the mixer has been run on the batch, so we are able to assume that requests are mostly non-conflicting. 
 We experimented with a couple of ways of assigning the requests to the threads but eventually found that our system works best when we assign every thread in the first group a request before beginning to assign requests to threads in the second group.
 We continue this process with the remaining groups before assigning a second request to each thread within the first group. 
@@ -374,13 +373,13 @@ Each execution thread makes the same sort of yield request, but the result of th
 When the last thread in the currently active group (the group that the PPM is allowing to execute) calls this yield function, the last thread notifies the PPM's control thread.
 This control thread then realizes that it is time to schedule a new group of threads to run and updates the active group accordingly. 
 
-This bitarray also has to be updated when threads no longer want to yield and are ready to execute again (e.g. when the nested request returns for a thread). 
-We decided in our implementation to only allow the PPM's control thread to mark when threads no longer want to yield because of the following scenario. 
+This bitarray also must be updated when threads no longer want to yield and are ready to execute again (e.g. when the nested request returns for a thread). 
+We decide in our implementation to only allow the PPM's control thread to mark when threads no longer want to yield because of the following scenario. 
 
-Imagine that in a group of two execution threads, the first thread reaches the point where it is ready to yield and makes its nested request. 
+Imagine that in a group of two execution threads, the first thread reaches the point where it is ready to yield and makes its nested request.
 Pretend that the second thread requires more local computation time and therefore is slightly behind the first thread in making its nested request.
 The second thread then does not reach the point to yield before the nested request that the first thread made returns.
-If we allowed the first thread to mark that it no longer wanted to yield the pipeline (since its nested request had completed), the PPM would not schedule the next group of threads to execute because not all of the threads in the currently active group wanted to anymore.
+If we allow the first thread to mark that it no longer wants to yield the pipeline (since its nested request had completed), the PPM will not schedule the next group of threads to execute because not all of the threads in the currently active group want to yield anymore.
 This is an issue because the second request's remote computation could take a long time, in which case no thread is currently executing on the local machine and the entire local service is therefore idle.
 A simple workaround for this is to only allow the PPM to mark the active group's threads as not wanting to yield after they have been swapped off the pipeline at least one time.
 
@@ -388,17 +387,17 @@ A simple workaround for this is to only allow the PPM to mark the active group's
 
 The second part of our system that enables groups of threads to run in a speculative manner is the Parallel Group Manager (PGM). This part of the system controls the execution threads within a single group.
 It is at this layer of abstraction in our system that we handle taking checkpoints, possibly rolling back, and informing the PPM when all of the threads in the group are finished executing their assigned requests within the batch.
-The Batch Manager (described in \ref{BM}) served as our starting point for this part of our implementation, as it was already designed to control multiple execution threads in the Adam environment.
-Some of the major modifications we had to make to the existing BM code involved making sure that the PGM was able to be scheduled onto and off of the pipeline controlled by the PPM, and that verification was performed in a way to guarantee safety and liveness. 
-Providing these correctness guarantees involved making sure that verification requests were made at all of the required times and that the responses to these messages were handled properly. 
-More details about our verification modifications and how we handle rollback in this approac are described in \ref{Verification}. 
+The Batch Manager (described in Section \ref{BM}) served as our starting point for this part of our implementation, as it was already designed to control multiple execution threads in the Adam environment.
+Some of the major modifications we make to the existing BM code involve making sure that the PGM was able to be scheduled onto and off of the pipeline controlled by the PPM, and that verification was performed in a way to guarantee safety and liveness. 
+Providing these correctness guarantees involves making sure that verification requests are made at all of the required times and that the responses to these messages are handled properly. 
+More details about our verification modifications and how we handle rollback in this approach are described in Section \ref{Verification}. 
 
-In order to make sure that PGM does not continue executing after being swapped off the pipeline, we require it communicate with the PPM to determine the number of the currently active group . 
+In order to make sure that PGM does not continue executing after being swapped off of the pipeline, we require that it communicate with the PPM to determine the number of the currently active group. 
 If the active group number corresponds to the group controlled by the PGM and its corresponding control thread, the PGM continues instructing the execution threads to process more requests and to take checkpoints when needed. 
-If instead the PGM found that the current group is no longer its own, it simply waits until the PPM notifies it to continue.
+If instead the PGM finds that the current group is no longer its own, it simply waits until the PPM notifies it to continue.
 
-We also had to make many changes to the execution threads to ensure that they behaved in this both parallel and pipelined environment.
-For example, we had to ensure that the execution threads made the appropriate calls into the PPM to notify the PPM when they were ready to yield and that the threads ensured that it was their corresponding group's turn to execute in the pipeline before proceeding with their executions.
+We also make many changes to the execution threads to ensure that they behave in this both parallel and pipelined system.
+For example, we ensure that the execution threads make the appropriate calls into the PPM to notify the PPM when they are ready to yield and that the threads ensure that it is their corresponding group's turn to execute in the pipeline before proceeding with their own executions.
 
 \subsection{Verification Stage}\label{Verification}
 
@@ -406,28 +405,28 @@ When we inherited the existing proof of concept Adam implementation, the verific
 In Eve, the system was only required to send out a verification message at the end of the computation of a batch to ensure that all replicas converged \cite{eve}.
 In Adam however, the verification process must be performed before any execution thread makes a nested request as well as at the end of the batch because both of these situations expose intermediate state to potential clients.
 
-In order to make this modification, we first had to add a second message processing thread to the system that could concurrently process the responses from a verification stage, while another thread also processing incoming client requests. 
-This was mostly an implementation detail but we do suspect that each control thread we added to the system reduces the scalability of our prototype as we approach the maximum utilization of our machines.
-When the verification response is received from the verifiers by the execution replicas, they process the response and determine whether they need to rollback, receive a state transfer, or could safely continue executing in the same way. 
-This part of the verification stage works almost identically to the way Eve's worked which is described in \ref{EveVerification}.
-Details about how our system handled rollback responses to verification requests can be found in the next section.
+% There was a sentence here about adding extra threads being a bad thing: This was the case with threads that were spinning inefficiently
+% but after we eliminated these troublesome issues, this was no longer the case
 
+In order to make this modification, we first add a second message processing thread to the system that can concurrently process the responses from a verification stage, while another thread is processing incoming client requests.
+When the verification responses are received from the verifiers by the execution replicas, they process each response and determine whether they need to rollback, receive a state transfer, or could safely continue executing in the same way. 
+This part of the verification stage works almost like Eve's which is described in Section \ref{EveVerification}.
 \section{Rollback and Correctness Guarantees}
 
 In this parallel pipeline system we must be prepared to rollback the state of an Adam replica to arrive at one that all replicas agree on in the event that the speculative execution causes a divergence. 
-Note that because we always ensure that all replicas are in the same state immediately before making any nested request, this means that the state that we must rollback to in the case of divergence is right before some execution threads make a nested request or right at the beginning of a batch. 
-If it is the latter, rollback is trivial, we simply must throw away all work performed so far and execute in a sequential deterministic manner to guarantee that progress is made and that all replicas converge. 
+Note that because we always ensure that all replicas are in the same state immediately before making any nested request, this means that the state that we must rollback to in the case of divergence is either right before some execution threads make a nested request or right at the beginning of a batch. 
+If it is the latter, rollback is trivial, we simply throw away all work performed so far and execute the requests again in a sequential deterministic manner to guarantee that progress is made and that all replicas converge. 
 This deterministic execution can even be performed in a sequential pipelined manner to achieve better performance than a naive sequential approach.
 
-If instead we rollback to right before the threads in a group make a nested request, our system must restore the state of all execution threads to the state they had when the latest checkpoint was taken. After doing so and setting the new active group successfully, the system will switch all threads into a sequential deterministic mode to ensure progress and convergence.
+If instead we rollback to right before the threads in a group make a nested request, our system restores the state of all execution threads to the state they had when the latest checkpoint was taken. After doing so and setting the new active group successfully, the system switches all threads into a sequential deterministic mode to ensure progress and convergence.
 We use Apache's Commons Javaflow library \cite{javaflow}, specifically the Continuations objects in this library, to checkpoint the stack of each execution thread.
 In addition to the stack, Adam also requires that the objects referenced in the stack are deep copied to the Merkle tree, an operation that is automatically performed simply by annotating the prototype code.
 This allows us to restore this stack and all referenced objects during a rollback and guarantee that all execution threads are in the exact state they were in right before the nested request was made on each replica.
-These Continuation objects with the stack of each thread are stored in the same Merkle tree data structure that Eve used which allows the replicas to make sure that they also have the same recorded stacks for each execution thread whenever a verification is performed. 
+These Continuation objects with the stack of each thread are stored in the same deterministic Merkle tree data structure that Eve used which allows the replicas to make sure that they also have the same recorded stacks for each execution thread whenever a verification is performed.
 This also allows replicas to receive continuations in a state transfer and immediately start the execution threads at the same point in the execution. 
 
 After performing a rollback in the non-trivial case, the threads in the now current group re-execute their nested request with the same sequence number that they used the first time which allows the remote service to respond from a cache and not perform operations multiple times.
-Since we know that all execution threads were in the same state before making this request, we know that the request that each execution thread makes must be exactly the same, thereby eliminating the issue that Eve has in this environment with making requests that might never be repeated after rolling back \cite{manosThesis}.
+Since we know that all execution threads were in the same state before making this request, we know that the request that each execution thread makes is exactly the same, thereby eliminating the issue that Eve has in this environment with making requests that might never be repeated after rolling back \cite{manosThesis}.
 
 \chapter{Evaluation and Results}\label{AdamResults}
 
