@@ -430,16 +430,16 @@ Since we know that all execution threads were in the same state before making th
 
 \chapter{Evaluation and Results}\label{AdamResults}
 
-When we finished implementing the multi-threaded and pipelined version of Adam, we were dismayed to find that our throughput increase results we were observing were much lower than we had hoped. 
+When we finished implementing the multi-threaded and pipelined version of Adam, we were dismayed to find that our throughput increase results were much lower than we had hoped. 
 For a variety of reasons, we first saw that using eight threads in Adam only resulted in less than a 4x throughput increase over the naive sequential implementation for very large requests when we expected something closer to a 16x improvement. 
 We then took a methodical journey through several heinous bugs and the intricacies of this design until we arrived at much more satisfying performance results. 
 For details on the approach we took to correcting our implementation, and more about the problem that we are trying to solve in general, please read Jim Given's thesis \cite{jim}.
 
-The evaluation presented here was performed on a testbed of several Dell PowerEdge R200 4 x 2.4GHz Intel Xeon machines and three Dell PowerEdge R515 16 x 3.2GHz AMD Opteron machines. 
-We used the 16 core (R515) machines as our execution replicas and the 4 core (R200) machines as our verifier, client, and filter machines. 
-Because we only had three 16 core machines, we were only able to perform scaling studies up to 16 cores in an unreplicated setting (meaning we tolerated no faulty execution replicas) with one 16 core machine running as the local service and another as the remote service. 
-For these unreplicated studies, only the execution nodes were not replicated, all verifier machines were still replicated in a fault tolerant way (four total to handle 1 commission error).
-The fully replicated study described in this chapter was performed by using each 16 core machine as both a 8 core local replica and an 8 core remote replica which constrained us to only being able to test in a full setting (with $r = 1$) with up to 8 execution threads.
+We perform the evaluation we present here on a testbed of several Dell PowerEdge R200 4 x 2.4GHz Intel Xeon machines and three Dell PowerEdge R515 16 x 3.2GHz AMD Opteron machines. 
+We use the 16 core (R515) machines as our execution replicas and the four core (R200) machines as our verifier, client, and filter machines. 
+Because we only have three 16 core machines, we are only able to perform scaling studies up to 16 cores in an unreplicated setting (meaning we tolerate no faulty execution replicas) with one 16 core machine running as the local service and another as the remote service. 
+For these unreplicated studies, only the execution nodes are not replicated, all verifier machines are still replicated in a fault tolerant way (four total to handle one commission error). 
+We performed the fully replicated study we describe in this chapter by using each 16 core machine as both a 8 core local replica and an 8 core remote replica which constrains us to only being able to test in a full setting (with $r = 1$) with up to 8 execution threads.
 
 \begin{figure}[h]
 \centering
@@ -447,12 +447,12 @@ The fully replicated study described in this chapter was performed by using each
 \caption{\label{scaling}Adam speedup over sequential performance for small, medium, and large requests.}
 \end{figure}
 
-One of our chief concerns when evaluating the performance of our system was to see how the system scaled with additional parallel execution threads. Figure \ref{scaling} shows the factor of throughput increase that we achieve by adding more execution threads to our system in an unreplicated environment. 
-These numbers were obtained by running our system with three groups of $x$ threads each where $x$ is the number found on the horizontal axis. 
-We then took the saturated throughput of the system for each number of threads and divided it by the throughput that a naive sequential implementation achieves for each size of request.
-As mentioned in Chapter \ref{AdamDesign}, we expected the theoretical maximum benefit of our system to have 32 times the throughput of the baseline, gaining a factor of 16 improvement from utilizing 16 cores and then doubling the throughput due to the two stage pipeline.
-We come the closest to this theoretical maximum with large (10 ms local computation and 10ms remote computation) requests  we believe because the computation time helps mask the overhead introduced by the checkpointing and the verification stage.
-We miss this mark by progressively more for shorter requests as the overhead becomes more pronounced and possibly due to bottlenecks in the system when processing larger numbers of client requests that we have not yet identified.
+One of our chief concerns when we evaluate the performance of our system is to see how the system scales with additional parallel execution threads. Figure \ref{scaling} shows the factor of throughput increase that we achieve by adding more execution threads to our system in an unreplicated environment.
+These numbers are obtained by running our system with three groups of $x$ threads each where $x$ is the number found on the horizontal axis. 
+We then take the saturated throughput of the system for each number of threads and divide it by the throughput that a naive sequential implementation achieves for each size of request.
+As mentioned in Chapter \ref{AdamDesign}, we expect the theoretical maximum benefit of our system to be 32 times the throughput of the baseline, gaining a factor of 16 improvement from utilizing 16 cores and then doubling the throughput due to the two stage pipeline.
+We come closest to this theoretical maximum with large (10 ms local computation and 10ms remote computation) requests which is because the increased computation time helps mask the overhead introduced by the checkpointing and the verification stage.
+We deviate from the theoretical benefit even more for shorter requests as the overhead becomes more pronounced and possibly due to bottlenecks in the system when processing larger numbers of client requests that we have not yet identified.
 
 \begin{figure}[h]
 \centering
@@ -460,11 +460,11 @@ We miss this mark by progressively more for shorter requests as the overhead bec
 \caption{\label{scalingmedmerkletree}Merkle tree impact on throughput relative to the sequential execution baseline for large requests.}
 \end{figure}
 
-The Merkle tree implementation that we used appears to be a major source of overhead in this system which can be seen in Figure \ref{scalingmedmerkletree}. 
+As Figure \ref{scalingmedmerkletree} shows, the Merkle tree implementation that we use appears to be a major source of overhead in this system.
 In this graph, we compare the scaling behavior of the unreplicated system when using a real Merkle tree implementation to when we use a fake Merkle tree.
 With the fake Merkle tree, we perform all of the identical operations that we perform with the real tree but all hashing and Merkle tree versioning operations complete instantly.
 With the fake tree in this unreplicated setting we achieve a maximum of just over $30$ times the throughput ($1371$ requests per second) of the naive sequential baseline execution ($45$ requests per second) out of a theoretically possible $32$ times the throughput.
-For the real tree, we achieve a speedup of almost $22$ times the baseline ($972$ requests per second) with all $16$ cores, meaning that we appear to be losing nearly $400$ requests per second due to the overhead of the Merkle tree's operations.
+For the real tree, we achieve a speedup of almost $22$ times the baseline ($972$ requests per second) with all $16$ cores, meaning that we are losing nearly $400$ requests per second because of the overhead of the Merkle tree's operations.
 As a result, we believe that there is still room for improvement through optimizations of our Merkle tree implementation.
 This could be achieved through better detection of new objects in the replica that must be hashed or more intelligent space allocation within the tree itself.
 
@@ -474,16 +474,16 @@ This could be achieved through better detection of new objects in the replica th
 \caption{\label{head2head}Latency-Throughput graphs of Adam for large requests with all four approaches.}
 \end{figure}
 
-We also compared our Adam implementation head to head with the previous three approaches described in Chapter \ref{Adam}: the naive sequential approach, the single-threaded pipelined approach, and the multi-threaded non-pipelined approach. 
+We also compare our Adam implementation head to head with the previous three approaches described in Chapter \ref{Adam}: the naive sequential approach, the single-threaded pipelined approach, and the multi-threaded non-pipelined approach. 
 Figure \ref{head2head} shows latency throughput graphs for our implementation running with three groups of eight threads each in a fully replicated environment. 
-We compare our implementation in this graph to the multi-threaded but non-pipelined approach running with 8 threads, and with the single-threaded pipelined approach running with three threads (which is equivalent to our implementation using three groups) as well as the naive sequential implementation. 
+We compare our implementation in this graph to the multi-threaded but non-pipelined approach running with eight threads, with the single-threaded pipelined approach running with three threads (which is equivalent to our implementation using three groups), and with the naive sequential implementation. 
 
-It can be seen from the graph that the naive sequential implementation achieves nearly $50$ requests per second which is the theoretical maximum throughput for $20$ms requests ($10$ms for the local and $10$ms remote computation). 
+It can be seen from the graph that the naive sequential implementation achieves close to $50$ requests per second which is the theoretical maximum throughput for $20$ms requests ($10$ms for the local and $10$ms remote computation). 
 The sequential pipelined approach approaches twice the performance of the naive implementation, due to the fact that the pipeline is of depth two (the local service and the remote service).
-The original multi-threaded Adam approach achieved a throughput of just over $300$ requests per second with $8$ execution threads. We would expect in this scenario at most an 8x increase in throughput over the naive sequential approach which would mean a throughput of $360$ requests per second.
-We miss this mark by a little more than one multiple of the naive sequential approach throughput which we believe is mostly due to the added overhead of the verification stage.
+The original multi-threaded Adam approach achieved a throughput of just over $300$ requests per second with eight execution threads. We would expect in this scenario at most an 8x increase in throughput over the naive sequential approach which would mean a throughput of $360$ requests per second.
+We miss this mark by a little more than one multiple of the naive sequential approach throughput because of to the added overhead of the verification stage.
 Our multi-threaded and pipelined implementation achieves a maximum throughput of at most $582$ requests per second with this setup while the original multi-threaded approach achieves slightly over $300$ at its saturation point. 
-This shows that our pipelining improvements achieve close to the throughput doubling that we expected.
+This shows that our pipelining improvements achieve close to the throughput doubling that we expect.
 
 \chapter{Future Work}\label{FutureWork}
 
@@ -495,7 +495,10 @@ In practice, we found that this round trip was not the bottleneck of the system,
 As shown in our evaluation of Adam, we did find that our system had much better performance gains on longer client requests than shorter ones due to the overhead that the additional checkpoints incurs in the form of additional Merkle tree computations. 
 We believe that the system could be modified to minimize the total number of checkpoints needed by making much larger groups and not checkpointing until all of the requests in these larger groups are ready to make the nested request.
 
-Another concern with our current implementation is the need to have large batch sizes. With three groups running in the system with 16 threads each, you need at least 48 concurrent and non-conflicting requests to assign each thread a single client request to perform. To actually to achieve the performance benefits from pipelining that we described in this paper, you need each execution thread to have multiple requests to process which drastically increases the needed batch size. One proposed solution would be to design the system so that the pipeline is always active, thereby eliminating the need to restart the pipeline with new batches and instead just adding the work to the execution threads' queues. We believe this is possible since we are already taking checkpoints for each request, it just complicates the rollback and work assigning procedures that we have in our prototype.
+Another concern with our current implementation is the need to have large batch sizes. With three groups running in the system with 16 threads each, you need at least 48 concurrent and non-conflicting requests to assign each thread a single client request to perform. 
+To achieve the performance benefits from pipelining that we described in this paper, each execution thread must have multiple requests to process which drastically increases the needed batch size. 
+One proposed solution would be to design the system so that the pipeline is always active, thereby eliminating the need to restart the pipeline with new batches and instead just adding the work to the execution threads' queues. 
+We believe this is possible since we are already taking checkpoints for each request, though it complicates the rollback and work assigning procedures that we describe here.
 
 \chapter{Related Work}\label{RelatedWork}
 
@@ -515,27 +518,28 @@ These techniques work by allowing the primary to perform all execution speculati
 One downside of this approach is that it does not handle errors of commission  while systems such as Adam and Eve do.
 
 In addition, Remus relies on aggressive checkpoint pipelining for performance that would not work in an environment with inter-service communication.
-Remus performs speculative execution past checkpoint times, which allows it to buffer client outputs until the state of the primary becomes visible. This originally occurred only when the primary releases the responses to client request however in this new setting, Remus would also have to block until a checkpoint was performed to make a nested request. 
-This additional blocking would leave the system idle until the checkpoint has been performed and received by other replicas.
-It is possible that Remus could be adapted to perform similar pipeline techniques to Adam but it would still suffer from its more expensive checkpointing operations and higher network bandwidth usage than Eve \cite{eve}. 
+Remus performs speculative execution past checkpoint times, which allows it to buffer client outputs until the state of the primary becomes visible. 
+Outputs of the system originally occurr only when the primary releases the responses to client request however in this new setting, Remus  also has to block until a checkpoint is performed to make a nested request. 
+This additional blocking leaves the system idle until the checkpoint has been performed and is received by other replicas.
+It is possible for Remus to be adapted to perform similar pipeline techniques to Adam but it would still suffer from its more expensive checkpointing operations and higher network bandwidth usage than Eve \cite{eve}. 
 
 Adam uses Eve's same system for collecting state that includes only the subset of the state that determines the the operation of the state machine and ignores values that vary over the replicas such as the state of communication devices or other unimportant configuration parameters \cite{manosThesis}.
-As a result, Adam would have to transmit less over the network in the case of a state transfer than a modified Remus.
-In the common case, Adam would only have to transmit hashes to guarantee consistency compared to the entire state that Remus would have to transmit before any nested request.
+As a result, Adam has to transmit less over the network in the case of a state transfer than a modified version of Remus.
+In the common case, Adam only has to transmit hashes to guarantee consistency compared to the entire state that Remus must transmit before any nested request.
 
 \chapter{Conclusion}\label{Conclusion}
 
-Traditional approaches to state machine replication have used deterministic single-threaded execution to guarantee that replicas agree on the same final state. Although these approaches are straightforward, they fail to take advantage of the multicore nature of today's machines. 
+Traditional approaches to state machine replication use deterministic single-threaded execution to guarantee that replicas agree on the same final state. Although these approaches are straightforward, they fail to take advantage of the multicore nature of today's machines. 
 In addition, these approaches are ill-suited to an environment with communicating services. This is because communication with other services requires a sequential execution thread to block while waiting for a response. 
 
-Newer techniques such as the Eve protocol \cite{eve} have leveraged speculative execution to allow SMR systems to be multi-threaded.
+Newer techniques such as the Eve protocol \cite{eve} leverage speculative execution to allow SMR systems to be multi-threaded.
 Even systems like Eve however do not immediately perform well in an environment with communicating services and known pipelining techniques can be effectively used to improve performance.
-We have presented a novel approach to providing the replicated state machine abstraction in an environment with communicating services that leverages both the multicore nature of today's machines and pipelining techniques to improve resource utilization. 
+We present a novel approach to providing the replicated state machine abstraction in an environment with communicating services that leverages both the multicore nature of today's machines and pipelining techniques to improve resource utilization. 
 
-We found through the use of microbenchmarks that our design and implementation allows a workload of heavy requests to scale over $21$ times the throughput of a naive sequential implementation in a non-replicated setting with 16 core machines.
-In a fully replicated and fault tolerant setting, we achieved $12.9$x the throughput of a naive sequential approach with just 8 cores per execution server in our microbenchmarks.
+We find through the use of microbenchmarks that our design and implementation allows a workload of heavy requests to scale over $21$ times the throughput of a naive sequential implementation in a non-replicated setting with 16 core machines.
+In a fully replicated and fault tolerant setting, we achieve $12.9$x the throughput of a naive sequential approach with just eight cores per execution server in our microbenchmarks.
 Although our current results on smaller request sizes do not scale as well with the number of cores in the system, we believe that the issues with our system are implementation specific and are exacerbated by our lack of access to a cluster large enough to saturate our system with client requests.
-We have demonstrated that speculative execution based multithreading techniques can be used in this environment to scale the system with the number of cores of the execution replicas and that pipelining can be applied to these multi-threaded techniques to nearly double the performance of such a SMR system.
+We demonstrate that speculative execution based multithreading techniques can be used with communicating replicated services to scale the system with the number of cores of the execution replicas and that pipelining can be applied to these multi-threaded techniques to nearly double the performance of such a SMR system.
 
 \bibliographystyle{plain}
 \bibliography{bib}
