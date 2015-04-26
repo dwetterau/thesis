@@ -276,51 +276,41 @@ For requests that took longer to process (1-10ms each) however, the system succe
 
 The core of the work that we performed was to adapt the initial work on the Adam project to support both multi-threading and pipelining simultaneously.
 As discussed in Chapter \ref{Adam}, initial work on Adam had yielded some promising results both with the multi-threaded non-pipelined approach and the single-threaded pipelined approach. 
-In order to better understand our approach to combining these techniques, let use first define a few terms for clarity:
-\begin{itemize}
-\item A \textbf{batch} of requests is a set of mostly non-conflicting client (the output of a mixer as defined in \ref{EveMixer}) requests to execute.
-\item A \textbf{group} of threads are execution threads that will run concurrently within the pipeline.
-\end{itemize}
+To better understand our approach to combining these techniques, please note that a \textbf{group} of threads are execution threads that will run concurrently within the pipeline.
 
 \begin{figure}[h]
 \centering
 \includegraphics[width=1.0\textwidth]{PipelinedParallel.png}
-\caption{\label{parpipe}An example execution of $12$ client requests in the multi-threaded pipelining approach we implemented. Two groups of two execution threads each can process $12$ client requests in just $7$ time slices.}
+\caption{\label{parpipe}An example execution of $12$ client requests in the multi-threaded pipelining approach we implemented. Two groups of two execution threads each can process $12$ client requests in just seven time slices.}
 \end{figure}
 
-At a very high level, our approach was to adapt the existing single-threaded pipelining code to have it schedule groups of threads to run in the pipeline instead of a single thread. 
-To manage each group of threads, we adapted the existing multi-threaded non-pipelined Adam code to allow it to behave within this pipelined environment. 
-Chapter \ref{AdamImplementation} will explain at length the steps we took to convert the existing code we started with, as well as the new code we had to write to make this idea a reality.
+At a very high level, our approach is to adapt the existing single-threaded pipelining code to have it schedule groups of threads to run in the pipeline instead of a single thread. 
+To manage each group of threads, we adapt the existing multi-threaded non-pipelined Adam code to allow it to behave within this pipelined environment. 
+Chapter \ref{AdamImplementation} explains at length the steps we took to convert the existing code we started with, as well as the new code we wrote to make this idea a reality.
 
-Figure \ref{parpipe} shows what an execution of $12$ client requests would look like in our multi-threaded and pipelined system with two groups of two execution threads each. 
+Figure \ref{parpipe} shows what an execution of $12$ client requests looks like in our multi-threaded and pipelined system with two groups of two execution threads each. 
 Notice that only one group is performing local computation at a time (the dark rectangles) but multiple threads within a group are running simultaneously.
-Also notice that the full execution of all $12$ client requests requires only $7$ of the same time slices used in the other diagrams.
+Also notice that the full execution of all $12$ client requests requires only seven of the same time slices used in the other diagrams.
 This abstraction also does not affect the total number of checkpoints that must be performed from the original multi-threaded approach.
 
 \section{Theoretical Benefits}
 
-By combining both pipelining and multi-threading, we expected our speedups over a naive replicated state machine in this system model to both scale linearly with the number of threads we were using as well as double because of the two stage pipeline. 
+By combining both pipelining and multi-threading, we expect our speedups over a naive replicated state machine in this system model to both scale linearly with the number of execution threads per group as well as double because of the two stage pipeline. 
 In total this meant that with the 16 core machines we had available to test with, we hoped to see approximately 32 times the throughput of a naive sequential implementation in our microbenchmarks. 
 
 Figure \ref{parpipe} is an example of the improvement that we would generally expect by using two groups with just two execution threads each on a batch of $12$ requests.
-Notice that since only two execution threads are performing local computation at any point in time, this two group, two thread each setup only utilizes two cores on the execution replica's machine.
+Notice that since only two execution threads are performing local computation at any point in time, our system only utilizes two cores on the execution replica's machine.
 We would expect a 2x throughput increase from using two threads concurrently as well as approximately a 2x throughput increase from the two stage pipeline for about a 4x throughput increase over the naive sequential approach.
 
-Visually, you can see this exemplified by the number of time slices in each diagram of this paper.
-The naive sequential implementation (Figure \ref{NaiveSequential}) required $24$ time slices while the execution in our system required only $7$.
+Visually, this is exemplified by the number of time slices in each diagram of this paper.
+The naive sequential implementation (Figure \ref{NaiveSequential}) required $24$ time slices while the execution in our system required only seven.
 
 \begin{align*}
 24 / 7 \approx 3.43
 \end{align*}
 
 This number actually converges to the desired 4x as the number of requests run in each batch increases to infinity.
-A formal proof of this fact is available in Jim Given's thesis but conceptually you can see that the larger the number of requests that each thread must execute, the less that the ``unmatched'' slices at the beginning and the end of the batch contribute. 
-If the diagrams instead showed batches of $48$ requests each, the naive implementation would require $48$ time slices ($48$ requests $\cdot \ 2$ slices / request $=\ 96$).
-Our pipelined implementation would require only $25$ slices: $48$ requests / $4$ threads $ = 12$ requests / thread $\cdot \ 2$ slices / request $ = 24$ slices $ + 1$ extra slice of time for the offset of the second group of threads. 
-
-\begin{align*}
-96 / 25 \approx 3.84
-\end{align*}
+A formal proof of this fact is available in Jim Given's thesis \cite{jim} but conceptually you can see that the larger the number of requests that each thread must execute, the less the ``unmatched'' slices at the beginning and the end of the batch contribute. 
 
 \chapter{Adam Implementation}\label{AdamImplementation}
 
@@ -376,7 +366,7 @@ In the PPM, we instead have to schedule requests within a batch to both groups o
 This is performed after the mixer has been run on the batch, so we are able to assume that requests are mostly non-conflicting. 
 We experimented with a couple of ways of assigning the requests to the threads but eventually found that our system works best when we assign every thread in the first group a request before beginning to assign requests to threads in the second group.
 We continue this process with the remaining groups before assigning a second request to each thread within the first group. 
-We believe that this is the best way to assign the requests because assigning them in this way makes sure that all cores are utilized as best as possible, leveraging the multicore nature of the machine before taking advantage of the pipelining by using multiple groups. This claim is argued more formally in Jim Given's thesis.
+We believe that this is the best way to assign the requests because assigning them in this way makes sure that all cores are utilized as best as possible, leveraging the multicore nature of the machine before taking advantage of the pipelining by using multiple groups. This claim is argued more formally in Jim Given's thesis \cite{jim}.
 
 The SPM also had a method that execution threads could call when the active execution thread was about to make its nested request and was ready to yield the pipeline to the next thread. 
 In the PPM, this procedure is slightly more complicated because the PPM must wait for all threads to be in a state that they can yield the pipeline in. 
@@ -444,7 +434,7 @@ Since we know that all execution threads were in the same state before making th
 When we finished implementing the multi-threaded and pipelined version of Adam, we were dismayed to find that our throughput increase results we were observing were much lower than we had hoped. 
 For a variety of reasons, we first saw that using eight threads in Adam only resulted in less than a 4x throughput increase over the naive sequential implementation for very large requests when we expected something closer to a 16x improvement. 
 We then took a methodical journey through several heinous bugs and the intricacies of this design until we arrived at much more satisfying performance results. 
-For details on the approach we took to correcting our implementation, and more about the problem that we are trying to solve in general, please read Jim Given's thesis.
+For details on the approach we took to correcting our implementation, and more about the problem that we are trying to solve in general, please read Jim Given's thesis \cite{jim}.
 
 The evaluation presented here was performed on a testbed of several Dell PowerEdge R200 4 x 2.4GHz Intel Xeon machines and three Dell PowerEdge R515 16 x 3.2GHz AMD Opteron machines. 
 We used the 16 core (R515) machines as our execution replicas and the 4 core (R200) machines as our verifier, client, and filter machines. 
