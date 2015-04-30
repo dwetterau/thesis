@@ -101,7 +101,7 @@ In theory the execute-verify approach is straightforward, but in order for Eve t
 If this were not the case, Eve would be strictly worse than SMR implemented sequentially because of the need to execute requests multiple times to guarantee safety. 
 To reduce the likelihood that request interleavings cause the final states of replicas to diverge, the authors introduce what they call the mixer which functions to separate requests that modify the same state variables in the system (discussed in Section \ref{EveMixer}). 
 After Eve runs the mixer on the incoming requests, it proceeds to the execution stage described in Section \ref{EveExecution}. 
-After executing a batch of requests, Eve moves on to the verification stage which guarantees that replicas compare their states efficiently and in a way that tolerates even Byzantine failures. 
+After executing a batch of requests, Eve moves on to the verification stage which guarantees that replicas compare their states efficiently and in a way that tolerates even Byzantine failures. 
 This verification stage is described in Section \ref{EveVerification} and the final results that the authors are able to produce with Eve are presented in Section \ref{EveResults}.
 
 \subsection{The Mixer}\label{EveMixer}
@@ -319,11 +319,11 @@ Before explaining our work to create a multi-threaded pipelined SMR system that 
 \subsection{Existing Multi-Threaded Adam Implementation}\label{BM}
 
 The existing multi-threaded Adam implementation we started with is a modification to the existing Eve \cite{eve} code that allows the prototype to perform nested requests. 
-Some of the core changes involve the use of Apache's Commons Javaflow library \cite{javaflow} to easily allow execution threads to rollback their state to a checkpoint, even if they are currently performing a local execution. 
+Some of the core changes involve the use of Apache's Commons Javaflow library \cite{javaflow} to easily allow execution threads to rollback their state to a checkpoint, even if they are currently in the middle of executing a client request. 
 The other modifications to Eve involve adding support for taking multiple checkpoints per batch, one after every time the execution threads ``hit a wall'', meaning that all currently active execution threads are either finished with the entire batch of requests or are ready to make a nested request.
 
 Execution threads are controlled in this implementation by the Batch Manager (BM) which handles the logic of making sure all threads have ``hit a wall'' and also initiates the checkpoint operation for each execution thread. 
-This BM is also handles ensuring that the all replicas are at the same state at each wall, which involves sending off a hash of the replica's state and initiating a rollback if needed. 
+This BM also ensures that all replicas are at the same state at each wall, which involves sending off a hash of the replica's state and initiating a rollback if needed. 
 The verification process is largely not finished in the BM as the existing multi-threaded attempt is intended to simply demonstrate that speculative execution can still provide performance gains even with communicating replicated services.
 
 \subsection{Sequential Pipeline Manager}\label{SPM}
@@ -342,7 +342,7 @@ After notifiying, the active thread immediately makes a blocking call to the rem
 When the SPM receives this yield notification, it notifies the thread with the next higher id (modulo the number of threads) to begin execution. 
 Eventually, the last thread with work to do yields the pipeline, at which point the SPM schedules the first thread again. 
 
-The first thread then either continues waiting for the nested request to complete, or continues executing the client request to completion. 
+The first thread then either continues waiting for the nested request to complete, or continues executing the client request until it hits another wall or finishes the request. 
 After completing a client request, the active thread either starts executing its next assigned request or notifies the SPM if it has executed all of its assigned requests.
 Once all threads have responded in this way, the SPM finishes the batch and releases the results to the clients.
 
@@ -396,7 +396,7 @@ If instead the PGM finds that the current group is no longer its own, it simply 
 Providing the safety and liveness guarantees of SMR involves making sure that verification requests are made at all of the required times and that the responses to these messages are handled properly. 
 More details about our verification modifications and how we handle rollback in this approach are described in Section \ref{Verification}. 
 
-We also make many changes to the execution threads to ensure that they behave in this both parallel and pipelined system.
+We also make many changes to the execution threads to ensure that they only execute when it is their corresponding group manager's turn.
 For example, we ensure that the execution threads make the appropriate calls into the PPM to notify the PPM when they are ready to yield and that the threads ensure that it is their corresponding group's turn to execute in the pipeline before proceeding with their own executions.
 
 \subsection{Verification Stage}\label{Verification}
@@ -425,11 +425,11 @@ These Continuation objects with the stack of each thread are stored in the same 
 This also allows replicas to receive continuations in a state transfer and immediately start the execution threads at the same point in the execution. 
 
 After performing a rollback in the non-trivial case, the threads in the now current group re-execute their nested request with the same sequence number that they used the first time which allows the remote service to respond from a cache and not perform operations multiple times.
-Since we know that all execution threads were in the same state before making this request, we know that the request that each execution thread makes is exactly the same, thereby eliminating the issue that Eve has with making requests that might never be repeated after rolling back \cite{manosThesis}.
+Since we know that all execution threads were in the same state before making this request, we know that the request that each execution thread makes during the re-exceution is exactly the same. This avoids the output-commit problem by ensuring that all outputs to the remote service are always the same, even if they must be redone.
 
 \chapter{Evaluation and Results}\label{AdamResults}
 
-When we finished implementing the multi-threaded and pipelined version of Adam, we were dismayed to find that our throughput increase results were much lower than we had hoped. 
+When we finished implementing the multi-threaded and pipelined version of Adam, we were dismayed to find that the throughput of our system was much lower than we had hoped. 
 For a variety of reasons, we first saw that using eight threads in Adam only resulted in less than a 4x throughput increase over the naive sequential implementation for very large requests when we expected something closer to a 16x improvement. 
 We then took a methodical journey through several heinous bugs and the intricacies of this design until we arrived at much more satisfying performance results. 
 For details on the approach we took to correcting our implementation, and more about the problem that we are trying to solve in general, please read Jim Given's thesis \cite{jim}.
@@ -450,11 +450,11 @@ We compare our Adam implementation head to head in a fully replicated environmen
 Figure \ref{head2head} shows latency throughput graphs for our implementation running with three groups of eight threads each in a fully replicated environment. 
 We compare our implementation in this graph to the multi-threaded but non-pipelined approach running with eight threads, with the single-threaded pipelined approach running with three threads (which is equivalent to our implementation using three groups), and with the naive sequential implementation. 
 
-It can be seen from the graph that the naive sequential implementation achieves $45$ requests per second which is close to the theoretical maximum throughput for $20$ms requests ($10$ms for the local and $10$ms remote computation), $50$ requests per second. 
-The sequential pipelined approach approaches twice the performance of the naive implementation because of the fact that the pipeline is of depth two (the local service and the remote service).
+It can be seen from the graph that the naive sequential implementation achieves $45$ requests per second which is close to the theoretical maximum throughput for $20$ms requests ($50$ requests per second). 
+The sequential pipelined approach achieves twice the performance of the naive implementation because of the fact that the pipeline is of depth two (the local service and the remote service).
 The original multi-threaded Adam approach achieves a throughput of just over $300$ requests per second with eight execution threads. 
 We expect that the multi-threaded approach achieves at most an 8x increase in throughput over the naive sequential approach which means a throughput of $360$ requests per second.
-We miss this mark by a little more than one multiple of the naive sequential approach throughput because of to the added overhead of the verification stage.
+We miss this mark by a little more than one multiple of the naive sequential approach throughput because of the added overhead of the Merkle tree operations and the verification stage.
 Our multi-threaded and pipelined implementation achieves a maximum throughput of at most $582$ requests per second with this setup while the original multi-threaded approach achieves slightly over $300$ at its saturation point. 
 This shows that our pipelining improvements achieve close to the throughput doubling that we expect.
 
@@ -469,7 +469,7 @@ One of our chief concerns when we evaluate the performance of our system is to s
 These numbers are obtained by running our system with three groups of $x$ threads each where $x$ is the number found on the horizontal axis. 
 We then take the saturated throughput of the system for each number of threads and divide it by the throughput that a naive sequential implementation achieves for each size of request.
 As mentioned in Chapter \ref{AdamDesign}, we expect the theoretical maximum benefit of our system to be 32 times the throughput of the baseline, gaining a factor of 16 improvement from utilizing 16 cores and then doubling the throughput because of the two stage pipeline.
-We come closest to this theoretical maximum with large (10 ms local computation and 10ms remote computation) requests which is because the increased computation time helps mask the overhead introduced by the checkpointing and the verification stage.
+We come closest to this theoretical maximum with large (10 ms local computation and 10ms remote computation) requests because the increased computation time helps mask the overhead introduced by the checkpointing and the verification stage.
 We deviate from the theoretical benefit even more for shorter requests as the overhead becomes more pronounced and possibly because of bottlenecks in the system when processing larger numbers of client requests that we have not yet identified.
 
 \begin{figure}[h]
@@ -526,7 +526,7 @@ In this new setting however, Remus also has to block until a checkpoint is perfo
 This additional blocking leaves the system idle until the checkpoint has been performed and is received by other replicas.
 It is possible for Remus to be adapted to perform similar pipeline techniques to Adam but it would still suffer from its more expensive checkpointing operations and higher network bandwidth usage than Eve \cite{eve}. 
 
-Adam uses Eve's same system for collecting state that includes only the subset of the state that determines the the operation of the state machine and ignores values that vary over the replicas such as the state of communication devices or other unimportant configuration parameters \cite{manosThesis}.
+Like Eve, Adam collects only the subset of the state that determines the operation of the state machine and ignores values that vary over the replicas such as the state of communication devices or other unimportant configuration parameters \cite{manosThesis}.
 As a result, Adam has to transmit less over the network in the case of a state transfer than a modified version of Remus.
 In the common case, replicas in the Adam protocol only has to transmit signed hashes to guarantee consistency compared to the entire state that Remus must transmit before any nested request.
 
